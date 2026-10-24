@@ -10,6 +10,8 @@ struct ActivityView: View {
     @State private var showReset = false
     @State private var keepDislikes = true
     @State private var editServer = false
+    @State private var shownRuns = 5
+    @State private var shownDecisions = 5
 
     var body: some View {
         NavigationStack {
@@ -19,16 +21,23 @@ struct ActivityView: View {
                 }
                 overview
                 if !health.isEmpty { connections }
+                discovery
+                // The newest few; Show more reveals more at a time
                 Section("Runs") {
-                    ForEach(runs) { r in
+                    ForEach(runs.prefix(shownRuns)) { r in
                         NavigationLink(value: r) { RunRow(run: r) }
+                    }
+                    if runs.count > shownRuns {
+                        Button("Show more") { shownRuns += 10 }
                     }
                 }
                 Section("Inbox decisions") {
                     if decisions.isEmpty { Text("Nothing kept or removed yet.").foregroundStyle(.secondary) }
-                    ForEach(decisions, id: \.self) { d in DecisionRow(decision: d) }
+                    ForEach(decisions.prefix(shownDecisions), id: \.self) { d in DecisionRow(decision: d) }
+                    if decisions.count > shownDecisions {
+                        Button("Show more") { shownDecisions += 10 }
+                    }
                 }
-                discovery
                 settings
             }
             .navigationTitle("Activity")

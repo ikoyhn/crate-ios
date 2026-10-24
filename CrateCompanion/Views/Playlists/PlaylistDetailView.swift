@@ -13,6 +13,10 @@ struct PlaylistDetailView: View {
     @State private var error: String?
     @State private var showAll = false
     @State private var confirmRegenerate = false
+    /// Select mode: tick songs, then act on them all at once.
+    @State private var selecting = false
+    @State private var selected: [String] = []  // song ids, in the order you ticked them
+    @State private var addingSelected = false
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -24,7 +28,9 @@ struct PlaylistDetailView: View {
     var body: some View {
         List {
             header
-            if ref.kind == .liked {
+            if selecting {
+                trackList
+            } else if ref.kind == .liked {
                 trackList  // Crate has no suggestions for Liked Songs
             } else {
                 Picker("Show", selection: $tab) {
@@ -40,7 +46,11 @@ struct PlaylistDetailView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle(ref.name)
+        .navigationTitle(selecting ? "\(selected.count) selected" : ref.name)
+        .navigationBarBackButtonHidden(selecting)
+        .sheet(isPresented: $addingSelected) {
+            AddToPlaylistSheet(songIds: selected) { endSelecting() }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .refreshable { await load() }
@@ -75,6 +85,38 @@ struct PlaylistDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if selecting {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(selected.count == tracks.count ? "Deselect all" : "Select all") {
+                    selected = selected.count == tracks.count ? [] : tracks.map(\.songId)
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { addingSelected = true } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
+                    Button { loveSelected() } label: { Label("Love", systemImage: "heart") }
+                    Divider()
+                    Button { playSelected(next: false) } label: { Label("Play", systemImage: "play") }
+                    Button { playSelected(next: true) } label: { Label("Add to queue", systemImage: "text.append") }
+                } label: {
+                    Label("Actions", systemImage: "ellipsis.circle")
+                }
+                .disabled(selected.isEmpty)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { endSelecting() }.bold()
+            }
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Select") { tab = .tracks; selecting = true }
+                    .disabled(tracks.isEmpty)
+            }
+            toolbarMenu
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarMenu: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 if regenerateJob != nil || promptId != nil {
@@ -106,16 +148,46 @@ struct PlaylistDetailView: View {
         } else if tracks.isEmpty {
             Text(ref.kind == .liked ? "Songs you ♥ show up here." : "No songs in this playlist yet.").foregroundStyle(.secondary)
         }
-        let shown = showAll ? tracks : Array(tracks.prefix(pageSize))
+        let shown = showAll || selecting ? tracks : Array(tracks.prefix(pageSize))
         ForEach(Array(shown.enumerated()), id: \.element.id) { i, t in
-            TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
-                     onPlay: { play(from: i) },
-                     onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
-                     onTakeOut: { takeOut(t) })
+            if selecting {
+                SelectableTrackRow(track: t, isSelected: selected.contains(t.songId)) { toggle(t.songId) }
+            } else {
+                TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
+                         onPlay: { play(from: i) },
+                         onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
+                         onTakeOut: { takeOut(t) })
+            }
         }
-        if !showAll && tracks.count > pageSize {
+        if !showAll && !selecting && tracks.count > pageSize {
             Button("Show all \(tracks.count) songs") { showAll = true }
         }
+    }
+
+    // MARK: - selection
+
+    private func toggle(_ songId: String) {
+        if let i = selected.firstIndex(of: songId) { selected.remove(at: i) } else { selected.append(songId) }
+    }
+
+    private func endSelecting() {
+        selecting = false
+        selected = []
+    }
+
+    private func loveSelected() {
+        for id in selected { model.setStar(id, true) }
+        for i in tracks.indices where selected.contains(tracks[i].songId) { tracks[i].starred = true }
+        model.say("Loved \(selected.count) songs")
+        endSelecting()
+    }
+
+    /// Play the selection now, or add it to the end of the queue.
+    private func playSelected(next: Bool) {
+        let chosen = selected.compactMap { id in tracks.first { $0.songId == id } }
+            .compactMap { model.resolver?.item($0, playlistKey: ref.key) }
+        if next { for item in chosen { player.addToQueue(item) } } else { player.play(chosen) }
+        endSelecting()
     }
 
     private func items() -> [PlayableItem] {
@@ -263,5 +335,31 @@ struct TrackRow: View {
         t.starred = true
         onChange(t)
         model.keep(track.songId)
+    }
+}
+
+/// A song in select mode: tap anywhere on the row to tick it.
+struct SelectableTrackRow: View {
+    @Environment(AppModel.self) private var model
+    let track: Track
+    let isSelected: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(track.title).lineLimit(1)
+                Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

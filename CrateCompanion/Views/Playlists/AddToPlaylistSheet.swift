@@ -7,7 +7,7 @@ import SwiftUI
 struct AddToPlaylistSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    enum Song { case library(String), new(deezerId: Int) }
+    enum Song { case library(String), new(deezerId: Int), several([String]) }
     let song: Song
     let title: String
     /// Called once it's on its way into a playlist.
@@ -19,6 +19,11 @@ struct AddToPlaylistSheet: View {
 
     init(deezerId: Int, title: String, onSent: (() -> Void)? = nil) {
         song = .new(deezerId: deezerId); self.title = title; self.onSent = onSent
+    }
+
+    /// Songs you have, added together (selected in a playlist).
+    init(songIds: [String], onSent: (() -> Void)? = nil) {
+        song = .several(songIds); title = "\(songIds.count) songs"; self.onSent = onSent
     }
 
     @State private var playlists: [OwnPlaylist] = []
@@ -40,7 +45,13 @@ struct AddToPlaylistSheet: View {
                     if loading { ProgressView() }
                     ForEach(playlists.filter { !$0.readonly }) { p in
                         Button { add(to: p.key, name: p.name) } label: {
-                            PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil)
+                            // the whole row is the button, not just the name
+                            HStack {
+                                PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil,
+                                            navidromeId: p.navidromeId)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(busy)
@@ -62,10 +73,15 @@ struct AddToPlaylistSheet: View {
         busy = true
         Task {
             defer { busy = false }
+            if case .several(let ids) = song {
+                await addSeveral(ids, to: key, name: name)
+                return
+            }
             guard let r = await model.attempt("Couldn't add it", { api -> Started in
                 switch song {
                 case .library(let id): return try await api.addLibrarySong(id, to: key)
                 case .new(let deezerId): return try await api.addNewSong(deezerId: deezerId, to: key)
+                case .several: fatalError("handled above")
                 }
             }) else { return }
             finish(keeping: r.keeping == true, runId: r.runId, name: name)
@@ -78,14 +94,44 @@ struct AddToPlaylistSheet: View {
         busy = true
         Task {
             defer { busy = false }
+            if case .several(let ids) = song {
+                guard let made = await model.attempt("Couldn't make the playlist", { try await $0.createPlaylist(named: name) })
+                else { return }
+                await addSeveral(ids, to: made.key, name: name)
+                return
+            }
             guard let r = await model.attempt("Couldn't make the playlist", { api -> CreatedPlaylist in
                 switch song {
                 case .library(let id): return try await api.createPlaylist(named: name, with: id)
                 case .new(let deezerId): return try await api.createPlaylist(named: name, deezerId: deezerId)
+                case .several: fatalError("handled above")
                 }
             }) else { return }
             finish(keeping: r.keeping == true, runId: r.runId, name: name)
         }
+    }
+
+    /// One at a time, in order, so they land in the playlist in the order you selected them.
+    /// Inbox tracks are kept first by their own runs.
+    private func addSeveral(_ ids: [String], to key: String, name: String) async {
+        guard let api = model.crate else { return }
+        var added = 0, failed = 0
+        for id in ids {
+            do {
+                let r = try await api.addLibrarySong(id, to: key)
+                if r.keeping == true {
+                    model.player.update(songId: id) { $0.isInbox = false }
+                    model.track(r, "Keeping and adding to \(name)")
+                }
+                added += 1
+            } catch {
+                failed += 1
+            }
+        }
+        onSent?()
+        model.say(failed == 0 ? "Added \(added) songs to \(name)" : "Added \(added) songs to \(name); \(failed) couldn't be added")
+        model.dataVersion += 1
+        dismiss()
     }
 
     private func finish(keeping: Bool, runId: Int?, name: String) {
