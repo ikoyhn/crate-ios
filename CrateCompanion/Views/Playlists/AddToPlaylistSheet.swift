@@ -40,7 +40,13 @@ struct AddToPlaylistSheet: View {
                     if loading { ProgressView() }
                     ForEach(playlists.filter { !$0.readonly }) { p in
                         Button { add(to: p.key, name: p.name) } label: {
-                            PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil)
+                            // the whole row is the button, not just the name
+                            HStack {
+                                PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil,
+                                            navidromeId: p.navidromeId)
+                                Spacer(minLength: 0)
+                            }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(busy)
