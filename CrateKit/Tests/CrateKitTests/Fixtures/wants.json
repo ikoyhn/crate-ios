@@ -1,0 +1,17 @@
+[
+ {
+  "id": 1,
+  "deezer_id": 3135556,
+  "artist": "Daft Punk",
+  "title": "One More Time",
+  "album": "Discovery",
+  "album_id": 302127,
+  "cover": "https://e-cdns-images.dzcdn.net/x.jpg",
+  "status": "ok",
+  "detail": null,
+  "created": 1792848954.9694703,
+  "done": null,
+  "via": "track",
+  "playlist_key": null
+ }
+]

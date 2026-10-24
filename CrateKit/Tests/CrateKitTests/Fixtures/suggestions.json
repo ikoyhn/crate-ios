@@ -1,0 +1,32 @@
+{
+ "status": "ready",
+ "items": [
+  {
+   "kind": "new",
+   "deezer_id": 916424,
+   "title": "Myth",
+   "artist": "Beach House",
+   "album": "Bloom",
+   "duration": 258,
+   "preview": "https://cdnt-preview.dzcdn.net/x.mp3",
+   "cover": "https://e-cdns-images.dzcdn.net/c.jpg",
+   "reason": "Similar to Slowdive",
+   "score": 1.2
+  },
+  {
+   "kind": "library",
+   "song_id": "s7",
+   "title": "When the Sun Hits",
+   "artist": "Slowdive",
+   "album": "Souvlaki",
+   "duration": 287,
+   "preview": "/api/preview/s7",
+   "cover": "/api/cover/s7",
+   "reason": "From your library",
+   "score": 0.9
+  }
+ ],
+ "at": 1792848954.9694703,
+ "error": null,
+ "stale": false
+}

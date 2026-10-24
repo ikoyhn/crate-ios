@@ -1,0 +1,132 @@
+# Builds Crate.ipa on every push to main, on tags like v1.0.0 (also attached to a GitHub release),
+# and on demand (Actions > ipa > Run workflow).
+#
+# Without secrets it builds an UNSIGNED .ipa: install it with a sideloading tool that signs it
+# for you (AltStore, SideStore, Sideloadly) using your own Apple ID.
+#
+# For a signed .ipa (ad hoc or development), add these repository secrets
+# (Settings > Secrets and variables > Actions):
+#   IOS_CERTIFICATE_P12        base64 of your signing certificate exported as .p12   (base64 -i cert.p12)
+#   IOS_CERTIFICATE_PASSWORD   the .p12's password
+#   IOS_PROVISIONING_PROFILE   base64 of the .mobileprovision for app.crate.companion
+#   IOS_TEAM_ID                your 10-character Apple team id
+#   IOS_EXPORT_METHOD          optional: ad-hoc (default), development, or app-store
+name: ipa
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick Xcode 16
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode_16*.app | sort -V | tail -1)"
+
+      - name: Test CrateKit
+        run: cd CrateKit && swift test
+
+      - name: Generate the Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Set the version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          sed -i '' "s/MARKETING_VERSION: \".*\"/MARKETING_VERSION: \"$V\"/" project.yml
+          sed -i '' "s/CURRENT_PROJECT_VERSION: \".*\"/CURRENT_PROJECT_VERSION: \"$GITHUB_RUN_NUMBER\"/" project.yml
+          xcodegen generate
+
+      - name: Install signing certificate and profile
+        id: signing
+        env:
+          P12: ${{ secrets.IOS_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
+          PROFILE: ${{ secrets.IOS_PROVISIONING_PROFILE }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$PROFILE" ]; then
+            echo "No signing secrets: building an unsigned .ipa"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          KEYCHAIN="$RUNNER_TEMP/build.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          echo "$PROFILE" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+          UUID=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin <<< "$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision")")
+          NAME=$(/usr/libexec/PlistBuddy -c "Print Name" /dev/stdin <<< "$(security cms -D -i "$RUNNER_TEMP/profile.mobileprovision")")
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$RUNNER_TEMP/profile.mobileprovision" ~/Library/MobileDevice/Provisioning\ Profiles/"$UUID".mobileprovision
+          echo "signed=true" >> "$GITHUB_OUTPUT"
+          echo "profile=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned .ipa
+        if: steps.signing.outputs.signed != 'true'
+        run: |
+          set -o pipefail
+          xcodebuild -project CrateCompanion.xcodeproj -scheme CrateCompanion -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | xcbeautify
+          mkdir -p out/Payload
+          cp -R build/Build/Products/Release-iphoneos/Crate.app out/Payload/
+          (cd out && zip -qry Crate.ipa Payload)
+
+      - name: Build signed .ipa
+        if: steps.signing.outputs.signed == 'true'
+        env:
+          TEAM_ID: ${{ secrets.IOS_TEAM_ID }}
+          METHOD: ${{ secrets.IOS_EXPORT_METHOD || 'ad-hoc' }}
+          PROFILE_NAME: ${{ steps.signing.outputs.profile }}
+        run: |
+          set -o pipefail
+          IDENTITY="Apple Distribution"
+          [ "$METHOD" = "development" ] && IDENTITY="Apple Development"
+          xcodebuild -project CrateCompanion.xcodeproj -scheme CrateCompanion -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -archivePath build/Crate.xcarchive \
+            DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY="$IDENTITY" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE_NAME" \
+            archive | xcbeautify
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>$METHOD</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key><dict><key>app.crate.companion</key><string>$PROFILE_NAME</string></dict>
+          </dict></plist>
+          PLIST
+          xcodebuild -exportArchive -archivePath build/Crate.xcarchive -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath out | xcbeautify
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Crate-ipa
+          path: out/*.ipa
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.ipa
+
+      - name: Clean up the keychain
+        if: always() && steps.signing.outputs.signed == 'true'
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain-db" || true

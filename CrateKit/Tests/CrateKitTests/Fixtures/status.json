@@ -1,0 +1,59 @@
+{
+ "library": {
+  "songs": 1,
+  "embedded": 0
+ },
+ "jobs": {
+  "library": {
+   "label": "Library sync",
+   "last": null
+  },
+  "likes": {
+   "label": "Check likes",
+   "last": null
+  },
+  "radio_sync": {
+   "label": "Radio likes",
+   "last": null
+  },
+  "discover": {
+   "label": "Discover Weekly",
+   "last": {
+    "id": 1,
+    "kind": "discover",
+    "started": 1792848894.9694703,
+    "finished": 1792848954.9694703,
+    "status": "ok",
+    "summary": "30 tracks"
+   }
+  },
+  "release_radar": {
+   "label": "Release Radar",
+   "last": null
+  },
+  "daily_mix": {
+   "label": "Daily Mixes",
+   "last": null
+  },
+  "ytdlp_update": {
+   "label": "Update yt-dlp",
+   "last": null
+  }
+ },
+ "next": {
+  "discover": "2026-10-26T03:00:00-04:00"
+ },
+ "busy": [
+  {
+   "kind": "prompt:1",
+   "status": "running",
+   "started": 1792848954.9694703
+  }
+ ],
+ "inbox": {
+  "new": 1,
+  "kept_30d": 1,
+  "removed_30d": 0
+ },
+ "radio_configured": false
+}

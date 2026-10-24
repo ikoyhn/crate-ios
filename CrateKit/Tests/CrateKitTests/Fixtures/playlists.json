@@ -1,0 +1,62 @@
+[
+ {
+  "key": "daily_mix_1",
+  "name": "Daily Mix 1: Dream pop",
+  "comment": null,
+  "updated_at": null,
+  "navidrome_id": "pl2",
+  "tracks": [
+   {
+    "pos": 0,
+    "song_id": "s2",
+    "artist": "Slowdive",
+    "title": "Alison",
+    "album": "Souvlaki",
+    "added_by_you": true,
+    "state": "new",
+    "liked": false,
+    "plays": 0,
+    "duration": 0,
+    "starred": false,
+    "rating": 0
+   }
+  ]
+ },
+ {
+  "key": "discover_weekly",
+  "name": "Discover Weekly",
+  "comment": "New for you",
+  "updated_at": 1792848954.9694703,
+  "navidrome_id": "pl1",
+  "tracks": [
+   {
+    "pos": 0,
+    "song_id": "s1",
+    "artist": "Beach House",
+    "title": "Space Song",
+    "album": "Depression Cherry",
+    "added_by_you": false,
+    "state": "library",
+    "liked": true,
+    "plays": 3,
+    "duration": 320,
+    "starred": true,
+    "rating": 4
+   },
+   {
+    "pos": 1,
+    "song_id": "s2",
+    "artist": "Slowdive",
+    "title": "Alison",
+    "album": "Souvlaki",
+    "added_by_you": false,
+    "state": "new",
+    "liked": false,
+    "plays": 0,
+    "duration": 0,
+    "starred": false,
+    "rating": 0
+   }
+  ]
+ }
+]

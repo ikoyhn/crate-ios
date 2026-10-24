@@ -1,0 +1,5 @@
+{
+ "app": "crate",
+ "api": 1,
+ "auth_required": true
+}

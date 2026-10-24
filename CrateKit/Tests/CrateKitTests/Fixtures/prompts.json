@@ -1,0 +1,12 @@
+[
+ {
+  "id": 1,
+  "prompt": "rainy sunday",
+  "size": 30,
+  "new_tracks": 5,
+  "auto_refresh": 1,
+  "name": "Rainy Sunday",
+  "created_at": 1792848954.9694703,
+  "last_run": null
+ }
+]

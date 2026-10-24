@@ -1,0 +1,23 @@
+{
+ "app": "crate",
+ "api": 1,
+ "navidrome": {
+  "url": "https://music.example.com",
+  "user": "jared",
+  "public_url_set": true
+ },
+ "jobs": {
+  "library": "Library sync",
+  "likes": "Check likes",
+  "radio_sync": "Radio likes",
+  "discover": "Discover Weekly",
+  "release_radar": "Release Radar",
+  "daily_mix": "Daily Mixes",
+  "ytdlp_update": "Update yt-dlp"
+ },
+ "features": {
+  "radio": false,
+  "soulseek": false,
+  "delete_unliked": true
+ }
+}
