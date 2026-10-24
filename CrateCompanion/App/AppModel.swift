@@ -56,6 +56,7 @@ final class AppModel {
             apply(saved, token: Keychain.get("crateToken") ?? "", password: Keychain.get("navidromePassword") ?? "")
         }
         player.onLike = { [weak self] item, starred in self?.setStar(item.songId, starred) }
+        player.onError = { [weak self] message in self?.say(message) }
     }
 
     var isConnected: Bool { crate != nil }

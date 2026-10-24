@@ -97,18 +97,14 @@ struct CatalogTrackRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Button {
-                if let item = model.resolver?.item(track) { player.play(item) }
-            } label: {
-                ZStack {
-                    Artwork(url: URL(string: track.cover), size: 44)
-                    if !track.preview.isEmpty {
-                        Image(systemName: "play.fill").font(.caption2).foregroundStyle(.white)
-                            .padding(5).background(.black.opacity(0.45), in: Circle())
-                    }
+            ZStack {
+                Artwork(url: URL(string: track.cover), size: 44)
+                if !track.preview.isEmpty {
+                    Image(systemName: isCurrent && player.isPlaying ? "speaker.wave.2.fill" : "play.fill")
+                        .font(.caption2).foregroundStyle(.white)
+                        .padding(5).background(.black.opacity(0.45), in: Circle())
                 }
             }
-            .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title).lineLimit(1)
                 Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -117,6 +113,16 @@ struct CatalogTrackRow: View {
             Text(track.duration.mmss).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             status
         }
+        // Tap anywhere on the row to play (or pause) its preview; the add button keeps its own tap
+        .contentShape(Rectangle())
+        .onTapGesture(perform: playOrPause)
+        .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play preview", playOrPause)
+    }
+
+    private var isCurrent: Bool { player.current?.id == "p:\(track.deezerId)" }
+
+    private func playOrPause() {
+        if isCurrent { player.toggle() } else if let item = model.resolver?.item(track) { player.play(item) }
     }
 
     @ViewBuilder

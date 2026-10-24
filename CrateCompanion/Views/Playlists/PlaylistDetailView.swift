@@ -18,10 +18,8 @@ struct PlaylistDetailView: View {
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
     private let pageSize = 50
 
-    init(ref: PlaylistRef) {
-        self.ref = ref
-        _tab = State(initialValue: ref.kind == .own ? .suggested : .tracks)  // your own playlists open on suggestions
-    }
+    // Explicit, as the private properties would make the memberwise init private
+    init(ref: PlaylistRef) { self.ref = ref }
 
     var body: some View {
         List {

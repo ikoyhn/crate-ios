@@ -171,6 +171,15 @@ final class ClientTests: XCTestCase {
         let body = try JSONSerialization.jsonObject(with: XCTUnwrap(t.last?.httpBody)) as? [String: [String]]
         XCTAssertEqual(body?["exclude"], ["916424", "s7"])
     }
+
+    func testFreshDeezerPreview() async {
+        let t = StubTransport(200, #"{"id": 916424, "preview": "https://cdnt-preview.dzcdn.net/new.mp3?hdnea=exp=1"}"#)
+        let url = await Deezer(transport: t).previewURL(trackId: 916424)
+        XCTAssertEqual(url?.absoluteString, "https://cdnt-preview.dzcdn.net/new.mp3?hdnea=exp=1")
+        XCTAssertEqual(t.last?.url?.absoluteString, "https://api.deezer.com/track/916424")
+        let missing = await Deezer(transport: StubTransport(200, #"{"error": {"code": 800}}"#)).previewURL(trackId: 1)
+        XCTAssertNil(missing)
+    }
 }
 
 final class QueueTests: XCTestCase {
