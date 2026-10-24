@@ -124,6 +124,19 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
+/// Answers by path; anything else is a 404.
+final class RouteTransport: HTTPTransport, @unchecked Sendable {
+    let routes: [String: String]
+    var last: URLRequest?
+    init(_ routes: [String: String]) { self.routes = routes }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        last = request
+        let body = routes[request.url!.path]
+        return (Data((body ?? "").utf8), HTTPURLResponse(url: request.url!, statusCode: body == nil ? 404 : 200, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
 final class ClientTests: XCTestCase {
     func api(_ t: StubTransport) -> CrateAPI { CrateAPI(baseURL: URL(string: "http://c:8090")!, token: "tok", transport: t) }
 
@@ -189,6 +202,34 @@ final class ClientTests: XCTestCase {
         let empty = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: none).starredSongs()
         XCTAssertEqual(empty.count, 0)
         XCTAssertEqual(PlaylistKind(key: PlaylistKind.likedKey), .liked)
+    }
+
+    func testHomeLists() async throws {
+        let albums = StubTransport(200, #"{"subsonic-response": {"status": "ok", "albumList2": {"album": [{"id": "al1", "name": "Bloom", "artist": "Beach House", "coverArt": "al-al1", "songCount": 10}]}}}"#)
+        let a = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: albums).albums("newest", size: 5)
+        XCTAssertEqual(a.first?.name, "Bloom")
+        XCTAssertTrue(albums.last?.url?.query?.contains("type=newest") ?? false)
+
+        let pl = StubTransport(200, #"""
+        {"subsonic-response": {"status": "ok", "playlist": {"entry": [
+          {"id": "1", "albumId": "A", "coverArt": "al-A"}, {"id": "2", "albumId": "A", "coverArt": "al-A"},
+          {"id": "3", "albumId": "B", "coverArt": "al-B"}, {"id": "4", "albumId": "C"}
+        ]}}}
+        """#)
+        let covers = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: pl).playlistCovers("p1")
+        XCTAssertEqual(covers, ["al-A", "al-B", "C"])
+    }
+
+    func testPlayStats() async throws {
+        let t = RouteTransport([
+            "/auth/login": #"{"token": "jwt", "name": "u"}"#,
+            "/api/song": #"[{"id": "s1", "title": "A", "playCount": 9, "duration": 201.5, "starred": true}, {"id": "s2", "playCount": 0}]"#,
+        ])
+        let stats = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: t).playStats(count: 5)
+        XCTAssertEqual(stats.top.map(\.songId), ["s1"])
+        XCTAssertEqual(stats.top.first?.duration, 201)
+        XCTAssertEqual(stats.recent.first?.plays, 9)
+        XCTAssertEqual(t.last?.value(forHTTPHeaderField: "X-ND-Authorization"), "Bearer jwt")
     }
 
     func testFreshDeezerPreview() async {

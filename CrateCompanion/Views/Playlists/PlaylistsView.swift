@@ -56,7 +56,8 @@ struct PlaylistsView: View {
                     if let ownError { Text(ownError).foregroundStyle(.secondary) }
                     ForEach(own) { p in
                         NavigationLink(value: PlaylistRef(key: p.key, name: p.name, comment: p.comment, readonly: p.readonly)) {
-                            PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil)
+                            PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil,
+                                        navidromeId: p.navidromeId)
                         }
                     }
                 }
@@ -91,6 +92,7 @@ struct PlaylistsView: View {
 
     private func load() async {
         guard let api = model.crate else { return }
+        model.forgetPlaylistCovers()  // their songs may have changed
         async let pls = api.playlists()
         async let mine = api.ownPlaylists()
         let nd = model.navidrome
@@ -107,11 +109,17 @@ struct PlaylistRow: View {
     let subtitle: String
     let kind: PlaylistKind
     let cover: URL?
+    /// Your Navidrome playlists get an icon tiled from four of their albums' covers.
+    var navidromeId: String?
 
     var body: some View {
         HStack(spacing: 12) {
             ZStack(alignment: .bottomTrailing) {
-                Artwork(url: cover, size: 52)
+                if let navidromeId {
+                    PlaylistCover(playlistId: navidromeId, size: 52)
+                } else {
+                    Artwork(url: cover, size: 52)
+                }
                 Image(systemName: kind.symbol)
                     .font(.caption2.bold()).foregroundStyle(.white)
                     .padding(4).background(kind.color, in: Circle())
@@ -123,5 +131,33 @@ struct PlaylistRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// Four of a playlist's album covers in a 2×2 grid, or its one cover when it has fewer albums.
+struct PlaylistCover: View {
+    @Environment(AppModel.self) private var model
+    let playlistId: String
+    var size: CGFloat = 52
+    @State private var covers: [String] = []
+
+    var body: some View {
+        Group {
+            if covers.count >= 4 {
+                Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+                    GridRow { tile(covers[0]); tile(covers[1]) }
+                    GridRow { tile(covers[2]); tile(covers[3]) }
+                }
+            } else {
+                Artwork(url: covers.first.flatMap { model.navidrome?.coverURL(id: $0, size: Int(size) * 3) }, size: size, corner: 0)
+            }
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .task(id: playlistId) { covers = await model.playlistCovers(playlistId) }
+    }
+
+    private func tile(_ id: String) -> some View {
+        Artwork(url: model.navidrome?.coverURL(id: id, size: Int(size) * 2), size: size / 2, corner: 0)
     }
 }

@@ -18,8 +18,8 @@ public struct Deezer: Sendable {
         var req = URLRequest(url: baseURL.appendingPathComponent("track/\(trackId)"))
         req.timeoutInterval = 8
         struct Track: Decodable { let preview: String? }
-        guard let (data, resp) = try? await transport.send(req), resp.statusCode == 200,
-              let preview = (try? JSONDecoder().decode(Track.self, from: data))?.preview, !preview.isEmpty
+        guard let response = try? await transport.send(req), response.1.statusCode == 200,
+              let preview = (try? JSONDecoder().decode(Track.self, from: response.0))?.preview, !preview.isEmpty
         else { return nil }
         return URL(string: preview)
     }

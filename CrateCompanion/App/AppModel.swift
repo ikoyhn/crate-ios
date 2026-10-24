@@ -52,6 +52,8 @@ final class AppModel {
     let player = AudioPlayer()
 
     @ObservationIgnored private var statusTask: Task<Void, Never>?
+    /// Navidrome playlist id -> cover art ids of its first four albums.
+    @ObservationIgnored private var playlistCoverCache: [String: [String]] = [:]
 
     init() {
         if let saved = Connection.load() {
@@ -114,6 +116,16 @@ final class AppModel {
     func refreshStatus() async {
         if let api = crate, let s = try? await api.status() { status = s }
     }
+
+    /// For a playlist's tiled icon. Cached until the playlists are next reloaded.
+    func playlistCovers(_ playlistId: String) async -> [String] {
+        if let cached = playlistCoverCache[playlistId] { return cached }
+        guard let nd = navidrome, let covers = try? await nd.playlistCovers(playlistId) else { return [] }
+        playlistCoverCache[playlistId] = covers
+        return covers
+    }
+
+    func forgetPlaylistCovers() { playlistCoverCache = [:] }
 
     // MARK: - feedback
 

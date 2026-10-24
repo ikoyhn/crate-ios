@@ -4,6 +4,8 @@ import SwiftUI
 struct MiniPlayer: View {
     @Environment(AudioPlayer.self) private var player
     @Environment(AppModel.self) private var model
+    /// Room scrolling content leaves for it.
+    static let height: CGFloat = 64
 
     var body: some View {
         if let item = player.current {
