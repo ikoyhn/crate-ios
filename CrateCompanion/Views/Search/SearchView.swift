@@ -9,6 +9,7 @@ struct SearchView: View {
     @State private var query = ""
     @State private var results: SearchResults?
     @State private var library: [Track] = []
+    @State private var artists: [NavidromeArtist] = []
     @State private var searching = false
     @State private var wants: [Want] = []
 
@@ -16,8 +17,21 @@ struct SearchView: View {
         NavigationStack {
             List {
                 if let results {
-                    if results.tracks.isEmpty && results.albums.isEmpty && library.isEmpty {
+                    if results.tracks.isEmpty && results.albums.isEmpty && library.isEmpty && artists.isEmpty {
                         ContentUnavailableView.search(text: query)
+                    }
+                    if !artists.isEmpty {
+                        Section("Artists") {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(alignment: .top, spacing: 14) {
+                                    ForEach(artists) { a in
+                                        NavigationLink(value: a) { ArtistTile(artist: a) }.buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        }
                     }
                     if !library.isEmpty {
                         Section("In your library") {
@@ -59,6 +73,8 @@ struct SearchView: View {
             }
             .navigationTitle("Search")
             .navigationDestination(for: CatalogAlbum.self) { AlbumView(album: $0, wants: wants, onAdd: add) }
+            .navigationDestination(for: NavidromeArtist.self) { ArtistView(artist: $0) }
+            .navigationDestination(for: NavidromeAlbum.self) { LibraryAlbumView(album: $0) }
             .searchable(text: $query, prompt: "Songs, albums, artists")
             .overlay { if searching { ProgressView() } }
             .task(id: query) { await search() }
@@ -78,14 +94,17 @@ struct SearchView: View {
         defer { searching = false }
         let nd = model.navidrome
         async let mine = nd?.searchSongs(q)
+        async let theirs = nd?.searchArtists(q)
         var r: SearchResults?
         var failure: Error?
         do { r = try await model.crate?.search(q) } catch { failure = error }
         let found = (try? await mine) ?? nil
+        let foundArtists = (try? await theirs) ?? nil
         // typing again cancels this search, which ends in an error: only a real failure is worth saying
         guard !Task.isCancelled else { return }
         if let failure { model.say("Search failed: \(failure.localizedDescription)") }
         library = found ?? []
+        artists = foundArtists ?? []
         if let r { results = r } else if found != nil { results = SearchResults(tracks: [], albums: []) }
     }
 
@@ -187,6 +206,22 @@ struct CatalogTrackRow: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Save to my library")
         }
+    }
+}
+
+/// An artist in your library, in the search results.
+struct ArtistTile: View {
+    @Environment(AppModel.self) private var model
+    let artist: NavidromeArtist
+    var body: some View {
+        VStack(spacing: 4) {
+            Artwork(url: model.navidrome?.coverURL(id: artist.coverArt ?? artist.id, size: 300), size: 96, corner: 48)
+            Text(artist.name).font(.caption.weight(.medium)).lineLimit(1)
+            if let n = artist.albumCount {
+                Text("\(n) album\(n == 1 ? "" : "s")").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 100)
     }
 }
 

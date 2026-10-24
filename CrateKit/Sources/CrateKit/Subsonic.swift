@@ -136,6 +136,26 @@ public struct Subsonic: Sendable {
         return tracks(try await decode(Body.self, call("search3", params)).searchResult3?.song ?? [])
     }
 
+    /// Artists in your library matching a search.
+    public func searchArtists(_ query: String, count: Int = 10) async throws -> [NavidromeArtist] {
+        struct Body: Decodable {
+            struct Result: Decodable { let artist: [NavidromeArtist]? }
+            let searchResult3: Result?
+        }
+        let params = ["query": query, "songCount": "0", "artistCount": String(count), "albumCount": "0"]
+        return try await decode(Body.self, call("search3", params)).searchResult3?.artist ?? []
+    }
+
+    /// An artist's albums in your library, newest first.
+    public func artistAlbums(_ artistId: String) async throws -> [NavidromeAlbum] {
+        struct Body: Decodable {
+            struct Artist: Decodable { let album: [NavidromeAlbum]? }
+            let artist: Artist?
+        }
+        let albums = try await decode(Body.self, call("getArtist", ["id": artistId])).artist?.album ?? []
+        return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+    }
+
     /// The library copy of a song you added (Deezer and your tags may differ a little).
     public func findSong(artist: String, title: String) async throws -> Track? {
         func norm(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
@@ -264,6 +284,13 @@ public struct NavidromeAlbum: Decodable, Sendable, Identifiable, Hashable {
     public let coverArt: String?
     public let year: Int?
     public let songCount: Int?
+}
+
+public struct NavidromeArtist: Decodable, Sendable, Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let albumCount: Int?
+    public let coverArt: String?
 }
 
 public struct PlayStats: Sendable {
