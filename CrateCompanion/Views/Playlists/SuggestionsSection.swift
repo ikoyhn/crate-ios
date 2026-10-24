@@ -53,18 +53,14 @@ struct SuggestionsSection: View {
     @ViewBuilder
     private func row(_ s: Suggestion) -> some View {
         let item = model.resolver?.item(s, playlistKey: ref.key)
+        let isCurrent = item != nil && player.current?.id == item?.id
         HStack(spacing: 12) {
-            Button {
-                if let item { player.play(item) }
-            } label: {
-                ZStack {
-                    Artwork(url: cover(s), size: 48)
-                    Image(systemName: player.current?.id == item?.id && player.isPlaying ? "speaker.wave.2.fill" : "play.fill")
-                        .font(.caption.bold()).foregroundStyle(.white)
-                        .padding(6).background(.black.opacity(0.45), in: Circle())
-                }
+            ZStack {
+                Artwork(url: cover(s), size: 48)
+                Image(systemName: isCurrent && player.isPlaying ? "speaker.wave.2.fill" : "play.fill")
+                    .font(.caption.bold()).foregroundStyle(.white)
+                    .padding(6).background(.black.opacity(0.45), in: Circle())
             }
-            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(s.title).lineLimit(1)
@@ -85,6 +81,10 @@ struct SuggestionsSection: View {
 
             if !ref.readonly { addButton(s) }
         }
+        // Tap anywhere on the row to play (or pause) it; the 👎 and + buttons keep their own taps
+        .contentShape(Rectangle())
+        .onTapGesture { playOrPause(item, isCurrent: isCurrent) }
+        .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play") { playOrPause(item, isCurrent: isCurrent) }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) { dislike(s) } label: { Label("Not for me", systemImage: "hand.thumbsdown") }
         }
@@ -122,6 +122,11 @@ struct SuggestionsSection: View {
     }
 
     // MARK: - actions
+
+    private func playOrPause(_ item: PlayableItem?, isCurrent: Bool) {
+        guard let item else { return }
+        if isCurrent { player.toggle() } else { player.play(item) }
+    }
 
     private func add(_ s: Suggestion) {
         adding[s.id] = .adding

@@ -15,6 +15,7 @@ struct PlaylistsView: View {
     @State private var playlists: [Playlist] = []
     @State private var own: [OwnPlaylist] = []
     @State private var ownError: String?
+    @State private var liked: [Track]?
     @State private var loaded = false
 
     var body: some View {
@@ -28,6 +29,15 @@ struct PlaylistsView: View {
                         Label("\(inbox.new) new track\(inbox.new == 1 ? "" : "s") waiting in your inbox. Love, rate 4–5 or Keep to keep them.",
                               systemImage: "tray.full")
                             .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                if model.navidrome != nil {
+                    Section {
+                        NavigationLink(value: PlaylistRef(key: PlaylistKind.likedKey, name: "Liked Songs", readonly: true)) {
+                            PlaylistRow(name: "Liked Songs", subtitle: liked.map { "\($0.count) songs" } ?? "Songs you've loved",
+                                        kind: .liked,
+                                        cover: liked?.first.flatMap { model.resolver?.artwork(songId: $0.songId, size: 120) })
+                        }
                     }
                 }
                 Section("Made for you") {
@@ -83,7 +93,10 @@ struct PlaylistsView: View {
         guard let api = model.crate else { return }
         async let pls = api.playlists()
         async let mine = api.ownPlaylists()
+        let nd = model.navidrome
+        async let loved = nd?.starredSongs()
         if let p = try? await pls { playlists = p }
+        if let l = try? await loved { liked = l }
         do { own = try await mine; ownError = nil } catch { ownError = error.localizedDescription }
         loaded = true
     }

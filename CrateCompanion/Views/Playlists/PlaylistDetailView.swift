@@ -18,23 +18,25 @@ struct PlaylistDetailView: View {
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
     private let pageSize = 50
 
-    init(ref: PlaylistRef) {
-        self.ref = ref
-        _tab = State(initialValue: ref.kind == .own ? .suggested : .tracks)  // your own playlists open on suggestions
-    }
+    // Explicit, as the private properties would make the memberwise init private
+    init(ref: PlaylistRef) { self.ref = ref }
 
     var body: some View {
         List {
             header
-            Picker("Show", selection: $tab) {
-                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue) }
-            }
-            .pickerStyle(.segmented)
-            .listRowSeparator(.hidden)
+            if ref.kind == .liked {
+                trackList  // Crate has no suggestions for Liked Songs
+            } else {
+                Picker("Show", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .listRowSeparator(.hidden)
 
-            switch tab {
-            case .tracks: trackList
-            case .suggested: SuggestionsSection(ref: ref, onAdded: { Task { await load() } })
+                switch tab {
+                case .tracks: trackList
+                case .suggested: SuggestionsSection(ref: ref, onAdded: { Task { await load() } })
+                }
             }
         }
         .listStyle(.plain)
@@ -82,6 +84,8 @@ struct PlaylistDetailView: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+            .opacity(ref.kind == .liked ? 0 : 1)  // nothing to rebuild or suggest for Liked Songs
+            .disabled(ref.kind == .liked)
         }
     }
 
@@ -100,7 +104,7 @@ struct PlaylistDetailView: View {
         if !loaded {
             ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
         } else if tracks.isEmpty {
-            Text("No songs in this playlist yet.").foregroundStyle(.secondary)
+            Text(ref.kind == .liked ? "Songs you ♥ show up here." : "No songs in this playlist yet.").foregroundStyle(.secondary)
         }
         let shown = showAll ? tracks : Array(tracks.prefix(pageSize))
         ForEach(Array(shown.enumerated()), id: \.element.id) { i, t in
@@ -137,7 +141,12 @@ struct PlaylistDetailView: View {
     private func load() async {
         guard let api = model.crate else { return }
         do {
-            tracks = try await api.tracks(forKey: ref.key)
+            if ref.kind == .liked {
+                guard let nd = model.navidrome else { return }
+                tracks = try await nd.starredSongs()
+            } else {
+                tracks = try await api.tracks(forKey: ref.key)
+            }
             error = nil
         } catch {
             self.error = error.localizedDescription

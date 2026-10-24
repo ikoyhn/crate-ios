@@ -171,6 +171,34 @@ final class ClientTests: XCTestCase {
         let body = try JSONSerialization.jsonObject(with: XCTUnwrap(t.last?.httpBody)) as? [String: [String]]
         XCTAssertEqual(body?["exclude"], ["916424", "s7"])
     }
+
+    func testStarredSongs() async throws {
+        let t = StubTransport(200, #"""
+        {"subsonic-response": {"status": "ok", "version": "1.16.1", "starred2": {"song": [
+          {"id": "a", "title": "Old", "artist": "X", "album": "Y", "duration": 200, "starred": "2024-01-01T10:00:00Z"},
+          {"id": "b", "title": "New", "artist": "Z", "album": "W", "duration": 180, "starred": "2025-06-01T10:00:00Z", "userRating": 5}
+        ]}}}
+        """#)
+        let nd = Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: t)
+        let songs = try await nd.starredSongs()
+        XCTAssertEqual(songs.map(\.songId), ["b", "a"])
+        XCTAssertEqual(songs[0].rating, 5)
+        XCTAssertTrue(songs.allSatisfy(\.starred))
+        XCTAssertEqual(t.last?.url?.path, "/rest/getStarred2")
+        let none = StubTransport(200, #"{"subsonic-response": {"status": "ok", "starred2": {}}}"#)
+        let empty = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: none).starredSongs()
+        XCTAssertEqual(empty.count, 0)
+        XCTAssertEqual(PlaylistKind(key: PlaylistKind.likedKey), .liked)
+    }
+
+    func testFreshDeezerPreview() async {
+        let t = StubTransport(200, #"{"id": 916424, "preview": "https://cdnt-preview.dzcdn.net/new.mp3?hdnea=exp=1"}"#)
+        let url = await Deezer(transport: t).previewURL(trackId: 916424)
+        XCTAssertEqual(url?.absoluteString, "https://cdnt-preview.dzcdn.net/new.mp3?hdnea=exp=1")
+        XCTAssertEqual(t.last?.url?.absoluteString, "https://api.deezer.com/track/916424")
+        let missing = await Deezer(transport: StubTransport(200, #"{"error": {"code": 800}}"#)).previewURL(trackId: 1)
+        XCTAssertNil(missing)
+    }
 }
 
 final class QueueTests: XCTestCase {

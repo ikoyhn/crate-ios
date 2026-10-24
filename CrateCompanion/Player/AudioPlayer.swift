@@ -22,19 +22,27 @@ final class AudioPlayer {
     @ObservationIgnored var navidrome: Subsonic?
     /// Lock-screen heart: (item, starred).
     @ObservationIgnored var onLike: ((PlayableItem, Bool) -> Void)?
+    /// A song that couldn't be played, as a message to show.
+    @ObservationIgnored var onError: ((String) -> Void)?
 
     @ObservationIgnored private let player = AVPlayer()
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    @ObservationIgnored private var itemObservation: NSKeyValueObservation?
+    @ObservationIgnored private let deezer = Deezer()
+    /// Bumped on every load, so a slow preview lookup can't start a song you've since skipped.
+    @ObservationIgnored private var loads = 0
     @ObservationIgnored private var scrobbled = false
     @ObservationIgnored private var artwork: (URL, MPMediaItemArtwork)?
     @ObservationIgnored private var sessionActive = false
 
     init() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
         player.automaticallyWaitsToMinimizeStalling = true
+        // Makes Crate the lock screen's now-playing app, so tapping the player there opens it
+        UIApplication.shared.beginReceivingRemoteControlEvents()
         observePlayer()
         setupRemoteCommands()
     }
@@ -69,6 +77,7 @@ final class AudioPlayer {
 
     func stop() {
         player.pause()
+        loads += 1
         player.replaceCurrentItem(with: nil)
         queue = PlayQueue()
         elapsed = 0; duration = 0
@@ -119,15 +128,41 @@ final class AudioPlayer {
         scrobbled = false
         elapsed = 0
         duration = Double(item.duration)
-        let playerItem = AVPlayerItem(url: item.streamURL)
-        playerItem.preferredForwardBufferDuration = 10
-        player.replaceCurrentItem(with: playerItem)
-        if autoplay { activateSession(); player.play() }
+        loads += 1
+        let load = loads
+        if case .preview(let deezerId) = item.source {
+            // The saved preview link has probably expired: ask Deezer for a fresh one first
+            player.replaceCurrentItem(with: nil)
+            isBuffering = autoplay
+            Task {
+                let url = await deezer.previewURL(trackId: deezerId) ?? item.streamURL
+                guard load == loads else { return }
+                start(url, title: item.title, autoplay: autoplay)
+            }
+        } else {
+            start(item.streamURL, title: item.title, autoplay: autoplay)
+        }
         updateNowPlaying()
         loadArtwork(for: item)
         if let id = item.songId, let nd = navidrome {
             Task.detached { try? await nd.scrobble(songId: id, submission: false) }  // "now playing"
         }
+    }
+
+    private func start(_ url: URL, title: String, autoplay: Bool) {
+        let playerItem = AVPlayerItem(url: url)
+        playerItem.preferredForwardBufferDuration = 10
+        itemObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            let reason = item.error?.localizedDescription ?? "unknown error"
+            Task { @MainActor in
+                guard let self, self.player.currentItem === item else { return }
+                self.isBuffering = false
+                self.onError?("Couldn't play \(title): \(reason)")
+            }
+        }
+        player.replaceCurrentItem(with: playerItem)
+        if autoplay { activateSession(); player.play() }
     }
 
     private func activateSession() {
