@@ -1,14 +1,15 @@
 import CrateKit
 import SwiftUI
 
-/// Home: what to play next, and shelves of your Navidrome library: recently played and added,
-/// your most played, random albums, and what you've been listening to.
+/// Home: what to play next, Crate's playlists made for you, and shelves of your Navidrome library:
+/// recently played and added, your most played, random albums, and what you've been listening to.
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @State private var upNext: [Track] = []
     @State private var upNextReason: String?
     @State private var stats: PlayStats?
     @State private var albums: [String: [NavidromeAlbum]] = [:]
+    @State private var madeForYou: [Playlist] = []
     @State private var showAllHistory = false
     @State private var loaded = false
 
@@ -21,6 +22,7 @@ struct HomeView: View {
                 } else {
                     LazyVStack(alignment: .leading, spacing: 28) {
                         SongShelf(title: "Up Next", subtitle: upNextReason, songs: upNext)
+                        MadeForYouShelf(playlists: madeForYou)
                         AlbumShelf(title: "Recently played", albums: albums["recent"])
                         AlbumShelf(title: "Recently added", albums: albums["newest"])
                         AlbumShelf(title: "Frequently played", albums: albums["frequent"])
@@ -35,6 +37,7 @@ struct HomeView: View {
             }
             .navigationTitle("Home")
             .navigationDestination(for: NavidromeAlbum.self) { LibraryAlbumView(album: $0) }
+            .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .refreshable { await load() }
             .task { if !loaded { await load() } }
             .overlay { if !loaded && model.navidrome != nil { ProgressView() } }
@@ -62,6 +65,8 @@ struct HomeView: View {
 
     private func load() async {
         guard let nd = model.navidrome else { loaded = true; return }
+        let crate = model.crate
+        async let playlists = try? crate?.playlists()
         async let played = try? nd.playStats(count: 30)
         async let recent = try? nd.albums("recent")
         async let newest = try? nd.albums("newest")
@@ -70,6 +75,7 @@ struct HomeView: View {
         albums = ["recent": await recent ?? [], "newest": await newest ?? [],
                   "frequent": await frequent ?? [], "random": await random ?? []]
         stats = await played
+        madeForYou = ((await playlists) ?? nil)?.madeForYouOrder() ?? []
         await loadUpNext(nd)
         loaded = true
     }
@@ -147,6 +153,41 @@ struct SongShelf: View {
 
     private func play(from index: Int) {
         player.play(songs.compactMap { model.resolver?.item($0, playlistKey: nil) }, startAt: index)
+    }
+}
+
+/// Crate's playlists: Discover Weekly, Release Radar, Daily Mixes and your prompt playlists.
+struct MadeForYouShelf: View {
+    @Environment(AppModel.self) private var model
+    let playlists: [Playlist]
+
+    var body: some View {
+        if !playlists.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                ShelfHeader(title: "Made for you")
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 14) {
+                        ForEach(playlists, id: \.key) { p in
+                            NavigationLink(value: PlaylistRef(key: p.key, name: p.name, comment: p.comment)) {
+                                Card(title: p.name, subtitle: subtitle(p),
+                                     art: p.tracks.first.flatMap { model.resolver?.artwork(songId: $0.songId, size: 300) })
+                                    .overlay(alignment: .topLeading) {
+                                        Image(systemName: p.kind.symbol)
+                                            .font(.caption.bold()).foregroundStyle(.white)
+                                            .padding(6).background(p.kind.color, in: Circle()).padding(6)
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+            }
+        }
+    }
+
+    private func subtitle(_ p: Playlist) -> String {
+        p.newCount > 0 ? "\(p.tracks.count) songs · \(p.newCount) new" : "\(p.tracks.count) songs"
     }
 }
 

@@ -1,12 +1,14 @@
 import CrateKit
 import SwiftUI
 
-/// Search Deezer's catalogue and add songs or albums to your library (Crate downloads them).
+/// Search your library (songs play in full) and Deezer's catalogue, to add songs or albums to
+/// your library (Crate downloads them).
 struct SearchView: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
     @State private var query = ""
     @State private var results: SearchResults?
+    @State private var library: [Track] = []
     @State private var searching = false
     @State private var wants: [Want] = []
 
@@ -14,8 +16,19 @@ struct SearchView: View {
         NavigationStack {
             List {
                 if let results {
-                    if results.tracks.isEmpty && results.albums.isEmpty {
+                    if results.tracks.isEmpty && results.albums.isEmpty && library.isEmpty {
                         ContentUnavailableView.search(text: query)
+                    }
+                    if !library.isEmpty {
+                        Section("In your library") {
+                            ForEach(Array(library.prefix(8).enumerated()), id: \.element.id) { i, t in
+                                TrackRow(track: t, playlistKey: nil, isCurrent: player.current?.songId == t.songId,
+                                         onPlay: { playLibrary(from: i) },
+                                         onChange: { updated in
+                                             if let j = library.firstIndex(where: { $0.id == t.id }) { library[j] = updated }
+                                         })
+                            }
+                        }
                     }
                     if !results.albums.isEmpty {
                         Section("Albums") {
@@ -31,7 +44,7 @@ struct SearchView: View {
                         }
                     }
                     if !results.tracks.isEmpty {
-                        Section("Songs") {
+                        Section(library.isEmpty ? "Songs" : "More songs") {
                             ForEach(results.tracks) { CatalogTrackRow(track: $0, want: want(for: $0), onAdd: add) }
                         }
                     }
@@ -63,7 +76,17 @@ struct SearchView: View {
         guard !Task.isCancelled else { return }
         searching = true
         defer { searching = false }
-        if let r = await model.attempt("Search failed", { try await $0.search(q) }), !Task.isCancelled { results = r }
+        let nd = model.navidrome
+        async let mine = nd?.searchSongs(q)
+        let r = await model.attempt("Search failed", { try await $0.search(q) })
+        let found = (try? await mine) ?? nil
+        guard !Task.isCancelled else { return }
+        library = found ?? []
+        if let r { results = r } else if found != nil { results = SearchResults(tracks: [], albums: []) }
+    }
+
+    private func playLibrary(from index: Int) {
+        player.play(library.compactMap { model.resolver?.item($0, playlistKey: nil) }, startAt: index)
     }
 
     private func loadWants() async {
@@ -114,17 +137,35 @@ struct CatalogTrackRow: View {
             Text(track.duration.mmss).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             status
         }
-        // Tap anywhere on the row to play (or pause) its preview; the add button keeps its own tap
+        // Tap anywhere on the row to play (or pause) it: in full if you have it, else its preview.
+        // The + button keeps its own tap.
         .contentShape(Rectangle())
         .onTapGesture(perform: playOrPause)
-        .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play preview", playOrPause)
+        .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play", playOrPause)
+        .swipeActions(edge: .leading) {
+            // a song you have is found in your library; a new one is downloaded first
+            Button { sendingToPlaylist = true } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
+        }
         .sheet(isPresented: $sendingToPlaylist) { AddToPlaylistSheet(deezerId: track.deezerId, title: track.title) }
     }
 
-    private var isCurrent: Bool { player.current?.id == "p:\(track.deezerId)" }
+    private var have: Bool { track.owned || want?.succeeded == true }
+
+    private var isCurrent: Bool {
+        guard let current = player.current else { return false }
+        return current.id == "p:\(track.deezerId)"
+            || (current.songId != nil && current.title == track.title && current.artist == track.artist)
+    }
 
     private func playOrPause() {
-        if isCurrent { player.toggle() } else if let item = model.resolver?.item(track) { player.play(item) }
+        if isCurrent { player.toggle(); return }
+        Task {
+            if have, let item = await model.libraryItem(artist: track.artist, title: track.title) {
+                player.play(item)
+            } else if let item = model.resolver?.item(track) {
+                player.play(item)
+            }
+        }
     }
 
     @ViewBuilder
@@ -135,20 +176,12 @@ struct CatalogTrackRow: View {
             Button { onAdd(track) } label: { Image(systemName: "arrow.clockwise.circle").font(.title3) }
                 .buttonStyle(.borderless)
                 .accessibilityLabel("Try again")
+        } else if have {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("In your library")
         } else {
-            let have = track.owned || want?.succeeded == true
-            Menu {
-                if !have {
-                    Button { onAdd(track) } label: { Label("Save to my library", systemImage: "arrow.down.circle") }
-                }
-                // a song you have is found in your library; a new one is downloaded first
-                Button { sendingToPlaylist = true } label: { Label("Save to a playlist…", systemImage: "text.badge.plus") }
-            } label: {
-                Image(systemName: have ? "checkmark.circle.fill" : "plus.circle").font(.title3)
-                    .foregroundStyle(have ? Color.green : Color.accentColor)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(have ? "In your library" : "Save")
+            Button { onAdd(track) } label: { Image(systemName: "plus.circle").font(.title3) }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Save to my library")
         }
     }
 }
@@ -217,15 +250,38 @@ struct AlbumView: View {
     }
 }
 
+/// A song you added. Once it's downloaded, tap it to play it from your library.
 struct WantRow: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AudioPlayer.self) private var player
     let want: Want
     let retry: () -> Void
 
+    private var isCurrent: Bool {
+        player.current?.songId != nil && player.current?.title == want.title && player.current?.artist == want.artist
+    }
+
     var body: some View {
+        row
+            .contentShape(Rectangle())
+            .onTapGesture { play() }
+    }
+
+    private func play() {
+        guard want.succeeded else { return }
+        if isCurrent { player.toggle(); return }
+        Task {
+            if let item = await model.libraryItem(artist: want.artist, title: want.title) { player.play(item) }
+            else { model.say("Couldn't find \(want.title) in your library yet") }
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 12) {
             Artwork(url: want.cover.flatMap(URL.init(string:)), size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(want.title).lineLimit(1)
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
                 Text(want.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if want.status == "failed", let d = want.detail, !d.isEmpty {
                     Text(d).font(.caption2).foregroundStyle(.red).lineLimit(2)

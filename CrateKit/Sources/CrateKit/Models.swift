@@ -303,6 +303,7 @@ public struct Suggestion: Codable, Sendable, Identifiable, Hashable {
 public struct SearchResults: Codable, Sendable {
     public let tracks: [CatalogTrack]
     public let albums: [CatalogAlbum]
+    public init(tracks: [CatalogTrack], albums: [CatalogAlbum]) { self.tracks = tracks; self.albums = albums }
 }
 
 /// A track from Deezer's catalogue (search, album pages).

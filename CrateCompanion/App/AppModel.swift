@@ -127,6 +127,12 @@ final class AppModel {
 
     func forgetPlaylistCovers() { playlistCoverCache = [:] }
 
+    /// A song you've downloaded, found in your library so it plays in full rather than as a preview.
+    func libraryItem(artist: String, title: String) async -> PlayableItem? {
+        guard let nd = navidrome, let track = try? await nd.findSong(artist: artist, title: title) else { return nil }
+        return resolver?.item(track, playlistKey: nil)
+    }
+
     // MARK: - feedback
 
     func say(_ text: String, undo: (@MainActor () -> Void)? = nil) {

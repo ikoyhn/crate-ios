@@ -47,7 +47,8 @@ struct SuggestionsSection: View {
         } footer: {
             Text(ref.readonly
                  ? "Navidrome won't let Crate change this playlist, so you can listen to suggestions but not add them."
-                 : "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist.")
+                 : (ref.kind == .own ? "" : "+ saves a song to your library. Swipe right to save it into one of your playlists. ")
+                   + "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist.")
         }
         .task(id: ref.key) { await poll() }
         .sheet(item: $sending) { s in
@@ -100,7 +101,13 @@ struct SuggestionsSection: View {
         }
         .swipeActions(edge: .leading) {
             if !ref.readonly && adding[s.id] == nil {
-                Button { add(s) } label: { Label("Add", systemImage: "plus") }.tint(.accentColor)
+                if ref.kind == .own {
+                    Button { add(s) } label: { Label("Add", systemImage: "plus") }.tint(.accentColor)
+                } else {
+                    // Crate rebuilds its playlists: send it to one of yours, or pin it here
+                    Button { sending = s } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
+                    Button { add(s) } label: { Label("Add here", systemImage: "pin") }.tint(.accentColor)
+                }
             }
         }
         .contextMenu {
@@ -126,18 +133,10 @@ struct SuggestionsSection: View {
                     .buttonStyle(.borderless)
                     .accessibilityLabel("Add to playlist")
             } else {
-                // Crate rebuilds its playlists, so offer to save it, or send it to one of yours
-                Menu {
-                    Button { save(s) } label: {
-                        Label(s.kind == .library ? "Like it" : "Save to my library", systemImage: "heart")
-                    }
-                    Button { sending = s } label: { Label("Save to a playlist…", systemImage: "text.badge.plus") }
-                    Button { add(s) } label: { Label("Add to \(ref.name)", systemImage: "plus") }
-                } label: {
-                    Image(systemName: "plus.circle").font(.title3)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Save")
+                // Crate rebuilds its playlists, so + just saves it (swipe right for a playlist)
+                Button { save(s) } label: { Image(systemName: "plus.circle").font(.title3) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(s.kind == .library ? "Like it" : "Save to my library")
             }
         }
     }

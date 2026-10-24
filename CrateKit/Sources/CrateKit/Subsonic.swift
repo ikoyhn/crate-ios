@@ -126,6 +126,29 @@ public struct Subsonic: Sendable {
         return tracks(try await decode(Body.self, call("getSimilarSongs2", ["id": songId, "count": String(count)])).similarSongs2?.song ?? [])
     }
 
+    /// Songs in your library matching a search.
+    public func searchSongs(_ query: String, count: Int = 25) async throws -> [Track] {
+        struct Body: Decodable {
+            struct Result: Decodable { let song: [SubsonicSong]? }
+            let searchResult3: Result?
+        }
+        let params = ["query": query, "songCount": String(count), "artistCount": "0", "albumCount": "0"]
+        return tracks(try await decode(Body.self, call("search3", params)).searchResult3?.song ?? [])
+    }
+
+    /// The library copy of a song you added (Deezer and your tags may differ a little).
+    public func findSong(artist: String, title: String) async throws -> Track? {
+        func norm(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        for query in ["\(artist) \(title)", title] {
+            let songs = try await searchSongs(query, count: 20)
+            if let hit = songs.first(where: { norm($0.title) == norm(title) && norm($0.artist).contains(norm(artist).prefix(6)) })
+                ?? songs.first(where: { norm($0.title).hasPrefix(norm(title)) || norm(title).hasPrefix(norm($0.title)) }) {
+                return hit
+            }
+        }
+        return nil
+    }
+
     public func randomSongs(count: Int = 20) async throws -> [Track] {
         struct Body: Decodable {
             struct List: Decodable { let song: [SubsonicSong]? }
