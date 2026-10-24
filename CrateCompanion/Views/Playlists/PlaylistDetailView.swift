@@ -60,7 +60,7 @@ struct PlaylistDetailView: View {
                 endSelecting()
             }
         } message: {
-            Text("Their files are deleted for good and they leave every playlist. New songs still in the inbox are just removed.")
+            Text("Their files are deleted for good, they leave your playlists, and Crate won't suggest them again. New songs still in the inbox are just removed.")
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
@@ -303,7 +303,7 @@ struct TrackRow: View {
         .confirmationDialog("Delete \(track.title) from your library?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { model.deleteFromLibrary([track.songId], label: "Deleting \(track.title)") }
         } message: {
-            Text("The file is deleted for good and the song leaves every playlist.")
+            Text("The file is deleted for good, the song leaves your playlists, and Crate won't suggest it again.")
         }
     }
 
