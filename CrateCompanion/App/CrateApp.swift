@@ -41,8 +41,8 @@ struct RootView: View {
 }
 
 extension View {
-    /// The mini player, just above the tab bar on every tab.
-    func withMiniPlayer() -> some View { modifier(MiniPlayerInset()) }
+    /// The mini player, just above the tab bar on every tab (and the tab's "Add to playlist…").
+    func withMiniPlayer() -> some View { modifier(MiniPlayerInset()).playlistPicker() }
 }
 
 private struct MiniPlayerInset: ViewModifier {

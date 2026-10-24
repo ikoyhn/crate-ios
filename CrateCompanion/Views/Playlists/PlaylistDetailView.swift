@@ -18,6 +18,8 @@ struct PlaylistDetailView: View {
     @State private var selected: [String] = []  // song ids, in the order you ticked them
     @State private var addingSelected = false
     @State private var confirmDeleteSelected = false
+    /// Songs you've removed: hidden straight away, even before Crate's job deletes them.
+    @State private var removed: Set<String> = []
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -171,7 +173,8 @@ struct PlaylistDetailView: View {
                 TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
                          onPlay: { play(from: i) },
                          onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
-                         onTakeOut: { takeOut(t) })
+                         onTakeOut: { takeOut(t) },
+                         onRemove: { remove(t) })
             }
         }
         if !showAll && !selecting && tracks.count > pageSize {
@@ -225,6 +228,16 @@ struct PlaylistDetailView: View {
         }
     }
 
+    /// Not for me: out of the list now, deleted and never suggested again by Crate.
+    private func remove(_ t: Track) {
+        removed.insert(t.songId)
+        withAnimation { tracks.removeAll { $0.id == t.id } }
+        model.remove(t.songId, title: t.title) {
+            removed.remove(t.songId)
+            Task { await load() }
+        }
+    }
+
     private func load() async {
         guard let api = model.crate else { return }
         do {
@@ -232,7 +245,7 @@ struct PlaylistDetailView: View {
                 guard let nd = model.navidrome else { return }
                 tracks = try await nd.starredSongs()
             } else {
-                tracks = try await api.tracks(forKey: ref.key)
+                tracks = try await api.tracks(forKey: ref.key).filter { !removed.contains($0.songId) }
             }
             error = nil
         } catch {
@@ -246,13 +259,15 @@ struct PlaylistDetailView: View {
 struct TrackRow: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(\.pickPlaylist) private var pickPlaylist
     let track: Track
     let playlistKey: String?
     var isCurrent = false
     let onPlay: () -> Void
     let onChange: (Track) -> Void
     var onTakeOut: (() -> Void)?
-    @State private var addingToPlaylist = false
+    /// Not for me on a new song. A list can pass its own to hide the row straight away.
+    var onRemove: (() -> Void)?
     @State private var confirmDelete = false
 
     var body: some View {
@@ -281,6 +296,13 @@ struct TrackRow: View {
                 Label("\(track.rating)", systemImage: "star.fill").labelStyle(.titleAndIcon)
                     .font(.caption2).foregroundStyle(.yellow)
             }
+            if track.state == .new {
+                Button(action: remove) {
+                    Image(systemName: "hand.thumbsdown").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Not for me")
+            }
             HeartButton(starred: track.starred) { toggleStar() }
         }
         .swipeActions(edge: .leading) {
@@ -289,17 +311,16 @@ struct TrackRow: View {
             } else {
                 Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: "heart") }.tint(.pink)
             }
-            Button { addingToPlaylist = true } label: { Label("Add to playlist", systemImage: "text.badge.plus") }.tint(.blue)
+            Button(action: addToPlaylist) { Label("Add to playlist", systemImage: "text.badge.plus") }.tint(.blue)
         }
         .swipeActions(edge: .trailing) {
             if track.state == .new {
-                Button(role: .destructive) { model.remove(track.songId) } label: { Label("Remove", systemImage: "trash") }
+                Button(role: .destructive, action: remove) { Label("Not for me", systemImage: "hand.thumbsdown") }
             } else if track.addedByYou, let onTakeOut {
                 Button(role: .destructive, action: onTakeOut) { Label("Take out", systemImage: "minus.circle") }
             }
         }
         .contextMenu { menu }
-        .sheet(isPresented: $addingToPlaylist) { AddToPlaylistSheet(songId: track.songId, title: track.title) }
         .confirmationDialog("Delete \(track.title) from your library?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { model.deleteFromLibrary([track.songId], label: "Deleting \(track.title)") }
         } message: {
@@ -313,7 +334,7 @@ struct TrackRow: View {
             Button { player.playNext(item) } label: { Label("Play next", systemImage: "text.insert") }
             Button { player.addToQueue(item) } label: { Label("Add to queue", systemImage: "text.append") }
         }
-        Button { addingToPlaylist = true } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
+        Button(action: addToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
         Divider()
         Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: track.starred ? "heart.slash" : "heart") }
         Menu {
@@ -326,7 +347,7 @@ struct TrackRow: View {
         if track.state == .new {
             Divider()
             Button { keep() } label: { Label("Keep in my library", systemImage: "checkmark.circle") }
-            Button(role: .destructive) { model.remove(track.songId) } label: { Label("Remove from inbox", systemImage: "trash") }
+            Button(role: .destructive, action: remove) { Label("Not for me", systemImage: "hand.thumbsdown") }
         }
         if track.addedByYou, let onTakeOut {
             Button(role: .destructive, action: onTakeOut) { Label("Take out of playlist", systemImage: "minus.circle") }
@@ -335,6 +356,14 @@ struct TrackRow: View {
             Divider()
             Button(role: .destructive) { confirmDelete = true } label: { Label("Delete from library…", systemImage: "trash") }
         }
+    }
+
+    private func addToPlaylist() {
+        pickPlaylist(PlaylistPick(song: .library(track.songId), title: track.title))
+    }
+
+    private func remove() {
+        if let onRemove { onRemove() } else { model.remove(track.songId, title: track.title) }
     }
 
     private func toggleStar() {

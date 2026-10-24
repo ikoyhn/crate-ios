@@ -56,28 +56,33 @@ struct NowPlayingView: View {
     var body: some View {
         NavigationStack {
             if let item = player.current {
-                ScrollView {
-                    VStack(spacing: 22) {
-                        Artwork(url: item.artworkURL, size: 300, corner: 14)
-                            .shadow(radius: 16, y: 6)
-                            .padding(.top, 8)
+                // Everything fits on one screen: the artwork takes whatever height is left over.
+                VStack(spacing: 16) {
+                    Artwork(url: item.artworkURL, size: nil, corner: 14)
+                        .frame(maxWidth: .infinity, maxHeight: 340)
+                        .shadow(radius: 16, y: 6)
+                        .padding(.top, 4)
+                        .layoutPriority(-1)
 
-                        VStack(spacing: 4) {
-                            Text(item.title).font(.title2.bold()).multilineTextAlignment(.center)
-                            Text(item.artist).font(.title3).foregroundStyle(.secondary)
-                            if !item.album.isEmpty { Text(item.album).font(.subheadline).foregroundStyle(.tertiary) }
-                            if item.isPreview { Badge(text: "30-second preview").padding(.top, 4) }
-                            if item.isInbox { Badge(text: "New · waiting in your inbox").padding(.top, 4) }
-                        }
-
-                        scrubber
-                        transport
-
-                        if item.songId != nil {
-                            curation(item)
-                        }
+                    VStack(spacing: 3) {
+                        Text(item.title).font(.title3.bold()).multilineTextAlignment(.center).lineLimit(2)
+                        Text(item.artist).font(.body).foregroundStyle(.secondary).lineLimit(1)
+                        if !item.album.isEmpty { Text(item.album).font(.subheadline).foregroundStyle(.tertiary).lineLimit(1) }
+                        if item.isPreview { Badge(text: "30-second preview").padding(.top, 2) }
+                        else if item.isInbox { Badge(text: "New · waiting in your inbox").padding(.top, 2) }
                     }
-                    .padding(.horizontal, 24).padding(.bottom, 24)
+
+                    scrubber
+                    transport
+
+                    if item.songId != nil {
+                        curation(item)
+                    }
+                }
+                .padding(.horizontal, 24).padding(.bottom, 12)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .sheet(isPresented: $addingToPlaylist) {
+                    if let id = item.songId { AddToPlaylistSheet(songId: id, title: item.title) }
                 }
                 .toolbar {
                     ToolbarItem(placement: .topBarLeading) {
@@ -118,7 +123,7 @@ struct NowPlayingView: View {
             }
             Button { player.previous() } label: { Image(systemName: "backward.fill").font(.title) }
             Button { player.toggle() } label: {
-                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 64))
+                Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill").font(.system(size: 58))
             }
             Button { player.next() } label: { Image(systemName: "forward.fill").font(.title) }
                 .disabled(!player.queue.hasNext)
@@ -141,18 +146,17 @@ struct NowPlayingView: View {
 
     /// Love / rate / keep / remove: everything that teaches Crate what you like.
     private func curation(_ item: PlayableItem) -> some View {
-        VStack(spacing: 16) {
-            HStack(spacing: 28) {
+        VStack(spacing: 12) {
+            HStack(spacing: 20) {
                 HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred, addTo: item.likeAddsTo) }
-                    .font(.title)
+                    .font(.title2)
                 StarRating(rating: item.rating) { model.setRating(item.songId, $0) }
-            }
-            Button { addingToPlaylist = true } label: {
-                Label("Add to playlist…", systemImage: "text.badge.plus").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .sheet(isPresented: $addingToPlaylist) {
-                if let id = item.songId { AddToPlaylistSheet(songId: id, title: item.title) }
+                Spacer(minLength: 0)
+                Button { addingToPlaylist = true } label: {
+                    Image(systemName: "text.badge.plus").font(.title3)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Add to playlist…")
             }
             if item.isInbox, let id = item.songId {
                 HStack(spacing: 12) {
@@ -160,16 +164,16 @@ struct NowPlayingView: View {
                         Label("Keep", systemImage: "checkmark.circle").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent).tint(.green)
-                    Button(role: .destructive) { model.remove(id) } label: {
-                        Label("Remove", systemImage: "trash").frame(maxWidth: .infinity)
+                    Button(role: .destructive) { model.remove(id, title: item.title) } label: {
+                        Label("Not for me", systemImage: "hand.thumbsdown").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.bordered)
                 }
-                Text("Love it or rate it 4–5 to keep it; 1–2 removes it.")
-                    .font(.caption).foregroundStyle(.secondary)
+                Text("Not for me deletes it and it won't be suggested again.")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.8)
             }
         }
-        .padding(16)
+        .padding(14)
         .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
     }
 }

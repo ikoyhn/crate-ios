@@ -1,6 +1,46 @@
 import CrateKit
 import SwiftUI
 
+/// A song waiting for "Add to playlist…".
+struct PlaylistPick: Identifiable {
+    let id = UUID()
+    let song: AddToPlaylistSheet.Song
+    let title: String
+    var onSent: (() -> Void)?
+}
+
+/// Opens "Add to playlist…" from any row: `@Environment(\.pickPlaylist) var pickPlaylist`.
+struct PickPlaylistAction {
+    let run: @MainActor (PlaylistPick) -> Void
+    @MainActor func callAsFunction(_ pick: PlaylistPick) { run(pick) }
+}
+
+extension EnvironmentValues {
+    @Entry var pickPlaylist = PickPlaylistAction { _ in }
+}
+
+extension View {
+    /// Presents "Add to playlist…" for everything inside (one per tab). The sheet lives out here
+    /// rather than on the row: a sheet owned by a List row is dismissed again when the row's
+    /// swipe actions close or the row is rebuilt, so it would sometimes flash shut.
+    func playlistPicker() -> some View { modifier(PlaylistPicker()) }
+}
+
+private struct PlaylistPicker: ViewModifier {
+    @State private var picking: PlaylistPick?
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.pickPlaylist, PickPlaylistAction { pick in
+                Task {
+                    try? await Task.sleep(nanoseconds: 350_000_000)  // let swipe actions finish closing
+                    picking = pick
+                }
+            })
+            .sheet(item: $picking) { AddToPlaylistSheet($0) }
+    }
+}
+
 /// "Add to playlist…": put a song into one of your own playlists, or a new one, without searching
 /// for it again. Inbox tracks are kept first, so they aren't deleted later; new songs (a suggestion
 /// or a search result) are downloaded into your library first.
@@ -19,6 +59,10 @@ struct AddToPlaylistSheet: View {
 
     init(deezerId: Int, title: String, onSent: (() -> Void)? = nil) {
         song = .new(deezerId: deezerId); self.title = title; self.onSent = onSent
+    }
+
+    init(_ pick: PlaylistPick) {
+        song = pick.song; title = pick.title; onSent = pick.onSent
     }
 
     /// Songs you have, added together (selected in a playlist).

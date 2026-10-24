@@ -1,11 +1,12 @@
 import CrateKit
 import SwiftUI
 
-/// Suggested songs for a playlist: new songs (30 s previews, downloaded when added) alternating
-/// with songs from your library. 👎 teaches Crate; Refresh shows a different batch.
+/// Suggested songs for a playlist: new songs (30 s previews, downloaded when added), alternating
+/// with songs from your library on your own playlists. 👎 teaches Crate; Refresh shows a different batch.
 struct SuggestionsSection: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(\.pickPlaylist) private var pickPlaylist
     let ref: PlaylistRef
     let onAdded: () -> Void
 
@@ -15,8 +16,6 @@ struct SuggestionsSection: View {
     @State private var updated: Double?
     /// Suggestion id -> what's happening to it.
     @State private var adding: [String: AddState] = [:]
-    /// Being saved into one of your playlists.
-    @State private var sending: Suggestion?
 
     enum AddState { case adding, downloading, added }
 
@@ -47,18 +46,12 @@ struct SuggestionsSection: View {
         } footer: {
             Text(ref.readonly
                  ? "Navidrome won't let Crate change this playlist, so you can listen to suggestions but not add them."
-                 : (ref.kind == .own ? "" : "+ saves a song to your library. Swipe right to save it into one of your playlists. ")
-                   + "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist.")
+                 : ref.kind == .own
+                 ? "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist."
+                 : "New songs only: songs you already have are suggested for your own playlists. + saves a song to your library. "
+                   + "Swipe right to save it into one of your playlists. 👎: never suggested again, and similar songs rank lower.")
         }
         .task(id: ref.key) { await poll() }
-        .sheet(item: $sending) { s in
-            let sent = { adding[s.id] = s.kind == .library ? .added : .downloading }
-            if s.kind == .library, let id = s.songId {
-                AddToPlaylistSheet(songId: id, title: s.title, onSent: sent)
-            } else if let deezerId = s.deezerId {
-                AddToPlaylistSheet(deezerId: deezerId, title: s.title, onSent: sent)
-            }
-        }
     }
 
     @ViewBuilder
@@ -105,7 +98,7 @@ struct SuggestionsSection: View {
                     Button { add(s) } label: { Label("Add", systemImage: "plus") }.tint(.accentColor)
                 } else {
                     // Crate rebuilds its playlists: send it to one of yours, or pin it here
-                    Button { sending = s } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
+                    Button { send(s) } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
                     Button { add(s) } label: { Label("Add here", systemImage: "pin") }.tint(.accentColor)
                 }
             }
@@ -169,6 +162,16 @@ struct SuggestionsSection: View {
                 adding[s.id] = .downloading
                 model.track(started, "Adding \(s.title)")
             }
+        }
+    }
+
+    /// Into one of your playlists, via "Add to playlist…".
+    private func send(_ s: Suggestion) {
+        let sent = { adding[s.id] = s.kind == .library ? .added : .downloading }
+        if s.kind == .library, let id = s.songId {
+            pickPlaylist(PlaylistPick(song: .library(id), title: s.title, onSent: sent))
+        } else if let deezerId = s.deezerId {
+            pickPlaylist(PlaylistPick(song: .new(deezerId: deezerId), title: s.title, onSent: sent))
         }
     }
 

@@ -140,7 +140,7 @@ struct CatalogTrackRow: View {
     let track: CatalogTrack
     let want: Want?
     let onAdd: (CatalogTrack) -> Void
-    @State private var sendingToPlaylist = false
+    @Environment(\.pickPlaylist) private var pickPlaylist
 
     var body: some View {
         HStack(spacing: 12) {
@@ -167,9 +167,11 @@ struct CatalogTrackRow: View {
         .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play", playOrPause)
         .swipeActions(edge: .leading) {
             // a song you have is found in your library; a new one is downloaded first
-            Button { sendingToPlaylist = true } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
+            Button { pickPlaylist(PlaylistPick(song: .new(deezerId: track.deezerId), title: track.title)) } label: {
+                Label("Playlist", systemImage: "text.badge.plus")
+            }
+            .tint(.blue)
         }
-        .sheet(isPresented: $sendingToPlaylist) { AddToPlaylistSheet(deezerId: track.deezerId, title: track.title) }
     }
 
     private var have: Bool { track.owned || want?.succeeded == true }
