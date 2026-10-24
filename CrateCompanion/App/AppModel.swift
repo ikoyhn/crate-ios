@@ -199,7 +199,7 @@ final class AppModel {
 
     func stopAll() {
         Task {
-            guard let r = await attempt({ try await $0.stopAll() }) else { return }
+            guard let r = await attempt("Couldn't stop tasks", { try await $0.stopAll() }) else { return }
             say(r.cancelled + r.stopping == 0 ? "Nothing was running" : "Stopping \(r.cancelled + r.stopping) task(s)")
             await refreshStatus()
         }
