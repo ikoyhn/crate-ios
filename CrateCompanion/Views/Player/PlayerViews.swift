@@ -18,7 +18,7 @@ struct MiniPlayer: View {
                 }
                 Spacer(minLength: 0)
                 if item.songId != nil {
-                    HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred) }
+                    HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred, addTo: item.likeAddsTo) }
                         .font(.title3)
                 }
                 Button { player.toggle() } label: {
@@ -143,7 +143,7 @@ struct NowPlayingView: View {
     private func curation(_ item: PlayableItem) -> some View {
         VStack(spacing: 16) {
             HStack(spacing: 28) {
-                HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred) }
+                HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred, addTo: item.likeAddsTo) }
                     .font(.title)
                 StarRating(rating: item.rating) { model.setRating(item.songId, $0) }
             }

@@ -94,6 +94,7 @@ struct CatalogTrackRow: View {
     let track: CatalogTrack
     let want: Want?
     let onAdd: (CatalogTrack) -> Void
+    @State private var sendingToPlaylist = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -117,6 +118,7 @@ struct CatalogTrackRow: View {
         .contentShape(Rectangle())
         .onTapGesture(perform: playOrPause)
         .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play preview", playOrPause)
+        .sheet(isPresented: $sendingToPlaylist) { AddToPlaylistSheet(deezerId: track.deezerId, title: track.title) }
     }
 
     private var isCurrent: Bool { player.current?.id == "p:\(track.deezerId)" }
@@ -127,16 +129,26 @@ struct CatalogTrackRow: View {
 
     @ViewBuilder
     private var status: some View {
-        if track.owned || want?.succeeded == true {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("In your library")
-        } else if want?.isBusy == true {
+        if want?.isBusy == true {
             ProgressView().controlSize(.small)
+        } else if want?.status == "failed" && !track.owned {
+            Button { onAdd(track) } label: { Image(systemName: "arrow.clockwise.circle").font(.title3) }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Try again")
         } else {
-            Button { onAdd(track) } label: {
-                Image(systemName: want?.status == "failed" ? "arrow.clockwise.circle" : "plus.circle").font(.title3)
+            let have = track.owned || want?.succeeded == true
+            Menu {
+                if !have {
+                    Button { onAdd(track) } label: { Label("Save to my library", systemImage: "arrow.down.circle") }
+                }
+                // a song you have is found in your library; a new one is downloaded first
+                Button { sendingToPlaylist = true } label: { Label("Save to a playlist…", systemImage: "text.badge.plus") }
+            } label: {
+                Image(systemName: have ? "checkmark.circle.fill" : "plus.circle").font(.title3)
+                    .foregroundStyle(have ? Color.green : Color.accentColor)
             }
             .buttonStyle(.borderless)
-            .accessibilityLabel(want?.status == "failed" ? "Try again" : "Add to library")
+            .accessibilityLabel(have ? "In your library" : "Save")
         }
     }
 }

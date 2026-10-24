@@ -34,7 +34,7 @@ struct HomeView: View {
                 }
             }
             .navigationTitle("Home")
-            .navigationDestination(for: NavidromeAlbum.self) { AlbumView(album: $0) }
+            .navigationDestination(for: NavidromeAlbum.self) { LibraryAlbumView(album: $0) }
             .refreshable { await load() }
             .task { if !loaded { await load() } }
             .overlay { if !loaded && model.navidrome != nil { ProgressView() } }
@@ -251,7 +251,7 @@ struct SongMenu: View {
 // MARK: - album
 
 /// An album from your Navidrome library.
-struct AlbumView: View {
+struct LibraryAlbumView: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
     let album: NavidromeAlbum

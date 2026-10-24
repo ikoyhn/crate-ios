@@ -15,6 +15,8 @@ struct SuggestionsSection: View {
     @State private var updated: Double?
     /// Suggestion id -> what's happening to it.
     @State private var adding: [String: AddState] = [:]
+    /// Being saved into one of your playlists.
+    @State private var sending: Suggestion?
 
     enum AddState { case adding, downloading, added }
 
@@ -48,6 +50,14 @@ struct SuggestionsSection: View {
                  : "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist.")
         }
         .task(id: ref.key) { await poll() }
+        .sheet(item: $sending) { s in
+            let sent = { adding[s.id] = s.kind == .library ? .added : .downloading }
+            if s.kind == .library, let id = s.songId {
+                AddToPlaylistSheet(songId: id, title: s.title, onSent: sent)
+            } else if let deezerId = s.deezerId {
+                AddToPlaylistSheet(deezerId: deezerId, title: s.title, onSent: sent)
+            }
+        }
     }
 
     @ViewBuilder
@@ -110,9 +120,25 @@ struct SuggestionsSection: View {
         case .added:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case nil:
-            Button { add(s) } label: { Image(systemName: "plus.circle").font(.title3) }
+            if ref.kind == .own {
+                // your own playlist: adding saves it and puts it here
+                Button { add(s) } label: { Image(systemName: "plus.circle").font(.title3) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Add to playlist")
+            } else {
+                // Crate rebuilds its playlists, so offer to save it, or send it to one of yours
+                Menu {
+                    Button { save(s) } label: {
+                        Label(s.kind == .library ? "Like it" : "Save to my library", systemImage: "heart")
+                    }
+                    Button { sending = s } label: { Label("Save to a playlist…", systemImage: "text.badge.plus") }
+                    Button { add(s) } label: { Label("Add to \(ref.name)", systemImage: "plus") }
+                } label: {
+                    Image(systemName: "plus.circle").font(.title3)
+                }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("Add to playlist")
+                .accessibilityLabel("Save")
+            }
         }
     }
 
@@ -144,6 +170,25 @@ struct SuggestionsSection: View {
                 adding[s.id] = .downloading
                 model.track(started, "Adding \(s.title)")
             }
+        }
+    }
+
+    /// Into your library without a playlist: a library song is liked, a new song downloaded.
+    private func save(_ s: Suggestion) {
+        if s.kind == .library {
+            adding[s.id] = .added
+            model.setStar(s.songId, true)
+            return
+        }
+        guard let deezerId = s.deezerId else { return }
+        adding[s.id] = .adding
+        Task {
+            guard let started = await model.attempt("Couldn't save it", { try await $0.want(track: deezerId) }) else {
+                adding[s.id] = nil
+                return
+            }
+            adding[s.id] = .downloading
+            model.track(started, "Saving \(s.title)")
         }
     }
 
