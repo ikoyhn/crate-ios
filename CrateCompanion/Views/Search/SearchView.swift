@@ -78,9 +78,13 @@ struct SearchView: View {
         defer { searching = false }
         let nd = model.navidrome
         async let mine = nd?.searchSongs(q)
-        let r = await model.attempt("Search failed", { try await $0.search(q) })
+        var r: SearchResults?
+        var failure: Error?
+        do { r = try await model.crate?.search(q) } catch { failure = error }
         let found = (try? await mine) ?? nil
+        // typing again cancels this search, which ends in an error: only a real failure is worth saying
         guard !Task.isCancelled else { return }
+        if let failure { model.say("Search failed: \(failure.localizedDescription)") }
         library = found ?? []
         if let r { results = r } else if found != nil { results = SearchResults(tracks: [], albums: []) }
     }
