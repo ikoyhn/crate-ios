@@ -219,6 +219,20 @@ final class AppModel {
         }
     }
 
+    /// Deletes the file for good; it stops playing and leaves the queue straight away.
+    func deleteFromLibrary(_ songIds: [String], label: String) {
+        Task {
+            var started: [Started] = []
+            for id in songIds {
+                guard let r = await attempt("Couldn't delete it", { try await $0.deleteFromLibrary(id) }) else { continue }
+                player.removeSong(id)
+                started.append(r)
+            }
+            // the jobs run one after another; following the last says when they're all done
+            if let last = started.last { track(last, label) }
+        }
+    }
+
     func runNow(_ job: String, label: String) {
         Task { track(await attempt("Couldn't start \(label)") { try await $0.runNow(job) }, label) }
     }
