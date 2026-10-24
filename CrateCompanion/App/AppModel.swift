@@ -52,12 +52,14 @@ final class AppModel {
     let player = AudioPlayer()
 
     @ObservationIgnored private var statusTask: Task<Void, Never>?
+    /// Navidrome playlist id -> cover art ids of its first four albums.
+    @ObservationIgnored private var playlistCoverCache: [String: [String]] = [:]
 
     init() {
         if let saved = Connection.load() {
             apply(saved, token: Keychain.get("crateToken") ?? "", password: Keychain.get("navidromePassword") ?? "")
         }
-        player.onLike = { [weak self] item, starred in self?.setStar(item.songId, starred) }
+        player.onLike = { [weak self] item, starred in self?.setStar(item.songId, starred, addTo: item.likeAddsTo) }
         player.onError = { [weak self] message in self?.say(message) }
     }
 
@@ -115,6 +117,16 @@ final class AppModel {
         if let api = crate, let s = try? await api.status() { status = s }
     }
 
+    /// For a playlist's tiled icon. Cached until the playlists are next reloaded.
+    func playlistCovers(_ playlistId: String) async -> [String] {
+        if let cached = playlistCoverCache[playlistId] { return cached }
+        guard let nd = navidrome, let covers = try? await nd.playlistCovers(playlistId) else { return [] }
+        playlistCoverCache[playlistId] = covers
+        return covers
+    }
+
+    func forgetPlaylistCovers() { playlistCoverCache = [:] }
+
     // MARK: - feedback
 
     func say(_ text: String, undo: (@MainActor () -> Void)? = nil) {
@@ -154,18 +166,21 @@ final class AppModel {
 
     // MARK: - song actions (shared by rows, Now Playing and the lock screen)
 
-    func setStar(_ songId: String?, _ starred: Bool) {
+    /// addTo: a song suggested for one of your playlists goes into it when you like it.
+    func setStar(_ songId: String?, _ starred: Bool, addTo playlistKey: String? = nil) {
         guard let songId else { return }
+        let addTo = starred ? playlistKey : nil
         player.update(songId: songId) { $0.starred = starred }
         Task {
-            guard let r = await attempt("Couldn't change the like", { try await $0.like(songId, starred: starred) }) else {
+            guard let r = await attempt("Couldn't change the like", { try await $0.like(songId, starred: starred, addTo: addTo) }) else {
                 player.update(songId: songId) { $0.starred = !starred }
                 return
             }
             if r.runId != nil {
                 player.update(songId: songId) { $0.isInbox = false }
-                track(r, "Keeping it")
+                track(r, addTo != nil ? "Keeping it and adding it to the playlist" : "Keeping it")
             } else {
+                if addTo != nil { say("Liked and added to the playlist") }
                 dataVersion += 1
             }
         }

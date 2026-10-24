@@ -21,6 +21,8 @@ struct RootView: View {
     var body: some View {
         if model.isConnected {
             TabView {
+                HomeView().withMiniPlayer()
+                    .tabItem { Label("Home", systemImage: "house") }
                 PlaylistsView().withMiniPlayer()
                     .tabItem { Label("Playlists", systemImage: "music.note.list") }
                 SearchView().withMiniPlayer()
@@ -46,8 +48,12 @@ extension View {
 private struct MiniPlayerInset: ViewModifier {
     @Environment(AudioPlayer.self) private var player
     func body(content: Content) -> some View {
-        content.safeAreaInset(edge: .bottom, spacing: 0) {
-            if player.current != nil { MiniPlayer() }
-        }
+        // A safe-area inset set outside a NavigationStack doesn't reach the lists inside it, so the
+        // mini player covered the end of every page. Give scrolling content room for it instead.
+        content
+            .contentMargins(.bottom, player.current != nil ? MiniPlayer.height : 0, for: .scrollContent)
+            .overlay(alignment: .bottom) {
+                if player.current != nil { MiniPlayer() }
+            }
     }
 }

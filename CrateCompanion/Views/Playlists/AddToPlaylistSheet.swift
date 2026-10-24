@@ -1,13 +1,25 @@
 import CrateKit
 import SwiftUI
 
-/// "Add to playlist…": put a song you're hearing into one of your own playlists, or a new one,
-/// without searching for it again. Inbox tracks are kept first, so they aren't deleted later.
+/// "Add to playlist…": put a song into one of your own playlists, or a new one, without searching
+/// for it again. Inbox tracks are kept first, so they aren't deleted later; new songs (a suggestion
+/// or a search result) are downloaded into your library first.
 struct AddToPlaylistSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let songId: String
+    enum Song { case library(String), new(deezerId: Int) }
+    let song: Song
     let title: String
+    /// Called once it's on its way into a playlist.
+    var onSent: (() -> Void)?
+
+    init(songId: String, title: String, onSent: (() -> Void)? = nil) {
+        song = .library(songId); self.title = title; self.onSent = onSent
+    }
+
+    init(deezerId: Int, title: String, onSent: (() -> Void)? = nil) {
+        song = .new(deezerId: deezerId); self.title = title; self.onSent = onSent
+    }
 
     @State private var playlists: [OwnPlaylist] = []
     @State private var loading = true
@@ -50,7 +62,12 @@ struct AddToPlaylistSheet: View {
         busy = true
         Task {
             defer { busy = false }
-            guard let r = await model.attempt("Couldn't add it", { try await $0.addLibrarySong(songId, to: key) }) else { return }
+            guard let r = await model.attempt("Couldn't add it", { api -> Started in
+                switch song {
+                case .library(let id): return try await api.addLibrarySong(id, to: key)
+                case .new(let deezerId): return try await api.addNewSong(deezerId: deezerId, to: key)
+                }
+            }) else { return }
             finish(keeping: r.keeping == true, runId: r.runId, name: name)
         }
     }
@@ -61,14 +78,22 @@ struct AddToPlaylistSheet: View {
         busy = true
         Task {
             defer { busy = false }
-            guard let r = await model.attempt("Couldn't make the playlist", { try await $0.createPlaylist(named: name, with: songId) })
-            else { return }
+            guard let r = await model.attempt("Couldn't make the playlist", { api -> CreatedPlaylist in
+                switch song {
+                case .library(let id): return try await api.createPlaylist(named: name, with: id)
+                case .new(let deezerId): return try await api.createPlaylist(named: name, deezerId: deezerId)
+                }
+            }) else { return }
             finish(keeping: r.keeping == true, runId: r.runId, name: name)
         }
     }
 
     private func finish(keeping: Bool, runId: Int?, name: String) {
-        if keeping {
+        onSent?()
+        if case .new = song {
+            model.dataVersion += 1  // shows it downloading
+            model.track(Started(runId: runId), "Downloading \(title) into \(name)")
+        } else if keeping, case .library(let songId) = song {
             model.player.update(songId: songId) { $0.isInbox = false }
             model.track(Started(runId: runId), "Keeping and adding to \(name)")
         } else {

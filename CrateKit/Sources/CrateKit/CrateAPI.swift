@@ -195,10 +195,16 @@ public struct CrateAPI: Sendable {
         try await send("POST", "/api/playlists/\(key.addingPathEscapes)/add", body: ["song_id": songId])
     }
 
-    /// A new playlist of your own in Navidrome, optionally starting with a song.
-    public func createPlaylist(named name: String, with songId: String? = nil) async throws -> CreatedPlaylist {
+    /// A new song into a playlist: downloaded into your library, then added (follow the run).
+    public func addNewSong(deezerId: Int, to key: String) async throws -> Started {
+        try await send("POST", "/api/playlists/\(key.addingPathEscapes)/add", body: ["deezer_id": deezerId])
+    }
+
+    /// A new playlist of your own in Navidrome, optionally starting with a song you have or a new one.
+    public func createPlaylist(named name: String, with songId: String? = nil, deezerId: Int? = nil) async throws -> CreatedPlaylist {
         var body: [String: JSONValue] = ["name": .string(name)]
         if let songId { body["song_id"] = .string(songId) }
+        if let deezerId { body["deezer_id"] = .int(deezerId) }
         return try await send("POST", "/api/own-playlists", body: body)
     }
 
@@ -227,9 +233,11 @@ public struct CrateAPI: Sendable {
 
     /// Heart and stars. Set in Navidrome now; inbox tracks are kept (star, 4-5) or removed (1-2) by
     /// a job whose run id comes back.
-    public func like(_ songId: String, starred: Bool? = nil, rating: Int? = nil) async throws -> Started {
+    /// addTo: liking a song suggested for one of your playlists also adds it there.
+    public func like(_ songId: String, starred: Bool? = nil, rating: Int? = nil, addTo playlistKey: String? = nil) async throws -> Started {
         var body: [String: JSONValue] = [:]
         if let starred { body["starred"] = .bool(starred) }
+        if let playlistKey { body["playlist_key"] = .string(playlistKey) }
         if let rating { body["rating"] = .int(rating) }
         return try await send("POST", "/api/songs/\(songId.addingPathEscapes)/like", body: body)
     }
@@ -259,8 +267,11 @@ public struct CrateAPI: Sendable {
 
     public func album(_ deezerId: Int) async throws -> AlbumDetail { try await get("/api/albums/\(deezerId)") }
 
-    public func want(track deezerId: Int) async throws -> Started {
-        try await send("POST", "/api/wants", body: ["kind": JSONValue.string("track"), "deezer_id": .int(deezerId)])
+    /// Download a song into your library; with a playlist key, it then goes into that playlist too.
+    public func want(track deezerId: Int, playlistKey: String? = nil) async throws -> Started {
+        var body: [String: JSONValue] = ["kind": .string("track"), "deezer_id": .int(deezerId)]
+        if let playlistKey { body["playlist_key"] = .string(playlistKey) }
+        return try await send("POST", "/api/wants", body: body)
     }
 
     public func want(album deezerId: Int) async throws -> Started {
