@@ -70,18 +70,7 @@ struct PlaylistsView: View {
         }
     }
 
-    /// Discover Weekly, Release Radar, then Daily Mixes in order, then prompt playlists.
-    private var sorted: [Playlist] {
-        func rank(_ p: Playlist) -> (Int, String) {
-            switch p.kind {
-            case .discover: (0, "")
-            case .releaseRadar: (1, "")
-            case .dailyMix: (2, String(format: "%04d", Int(p.key.split(separator: "_").last ?? "") ?? 0))
-            default: (3, p.name.lowercased())
-            }
-        }
-        return playlists.sorted { rank($0) < rank($1) }
-    }
+    private var sorted: [Playlist] { playlists.madeForYouOrder() }
 
     private func subtitle(_ p: Playlist) -> String {
         var parts = ["\(p.tracks.count) songs"]
@@ -159,5 +148,20 @@ struct PlaylistCover: View {
 
     private func tile(_ id: String) -> some View {
         Artwork(url: model.navidrome?.coverURL(id: id, size: Int(size) * 2), size: size / 2, corner: 0)
+    }
+}
+
+extension [Playlist] {
+    /// Discover Weekly, Release Radar, then Daily Mixes in order, then prompt playlists.
+    func madeForYouOrder() -> [Playlist] {
+        func rank(_ p: Playlist) -> (Int, String) {
+            switch p.kind {
+            case .discover: (0, "")
+            case .releaseRadar: (1, "")
+            case .dailyMix: (2, String(format: "%04d", Int(p.key.split(separator: "_").last ?? "") ?? 0))
+            default: (3, p.name.lowercased())
+            }
+        }
+        return sorted { rank($0) < rank($1) }
     }
 }
