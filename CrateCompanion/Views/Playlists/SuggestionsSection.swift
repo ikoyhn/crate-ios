@@ -1,8 +1,8 @@
 import CrateKit
 import SwiftUI
 
-/// Suggested songs for a playlist: new songs (30 s previews, downloaded when added) alternating
-/// with songs from your library. 👎 teaches Crate; Refresh shows a different batch.
+/// Suggested songs for a playlist: new songs (30 s previews, downloaded when added), alternating
+/// with songs from your library on your own playlists. 👎 teaches Crate; Refresh shows a different batch.
 struct SuggestionsSection: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
@@ -45,7 +45,9 @@ struct SuggestionsSection: View {
         } footer: {
             Text(ref.readonly
                  ? "Navidrome won't let Crate change this playlist, so you can listen to suggestions but not add them."
-                 : "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist.")
+                 : ref.kind == .own
+                 ? "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist."
+                 : "New songs only: songs you already have are suggested for your own playlists. 👎: never suggested again, and similar songs rank lower.")
         }
         .task(id: ref.key) { await poll() }
     }

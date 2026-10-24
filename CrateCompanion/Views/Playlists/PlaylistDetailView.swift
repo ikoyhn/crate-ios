@@ -13,6 +13,11 @@ struct PlaylistDetailView: View {
     @State private var error: String?
     @State private var showAll = false
     @State private var confirmRegenerate = false
+    /// Held here rather than on the row: a sheet owned by a List row is dismissed again when the
+    /// row's swipe actions close or the row is rebuilt, so it would sometimes flash shut.
+    @State private var addingToPlaylist: Track?
+    /// Songs you've removed: hidden straight away, even before Crate's job deletes them.
+    @State private var removed: Set<String> = []
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -43,6 +48,7 @@ struct PlaylistDetailView: View {
         .toolbar { toolbar }
         .refreshable { await load() }
         .task(id: model.dataVersion) { await load() }
+        .sheet(item: $addingToPlaylist) { t in AddToPlaylistSheet(songId: t.songId, title: t.title) }
         .confirmationDialog("Rebuild \(ref.name)?", isPresented: $confirmRegenerate, titleVisibility: .visible) {
             Button("Rebuild now") { regenerate() }
         } message: {
@@ -107,7 +113,9 @@ struct PlaylistDetailView: View {
             TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
                      onPlay: { play(from: i) },
                      onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
-                     onTakeOut: { takeOut(t) })
+                     onTakeOut: { takeOut(t) },
+                     onRemove: { remove(t) },
+                     onAddToPlaylist: { addToPlaylist(t) })
         }
         if !showAll && tracks.count > pageSize {
             Button("Show all \(tracks.count) songs") { showAll = true }
@@ -134,10 +142,28 @@ struct PlaylistDetailView: View {
         }
     }
 
+    /// Not for me: out of the list now, deleted and never suggested again by Crate.
+    private func remove(_ t: Track) {
+        removed.insert(t.songId)
+        withAnimation { tracks.removeAll { $0.id == t.id } }
+        model.remove(t.songId, title: t.title) {
+            removed.remove(t.songId)
+            Task { await load() }
+        }
+    }
+
+    private func addToPlaylist(_ t: Track) {
+        // let the swipe actions finish closing first, or the sheet can be dismissed with them
+        Task {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            addingToPlaylist = t
+        }
+    }
+
     private func load() async {
         guard let api = model.crate else { return }
         do {
-            tracks = try await api.tracks(forKey: ref.key)
+            tracks = try await api.tracks(forKey: ref.key).filter { !removed.contains($0.songId) }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -156,7 +182,8 @@ struct TrackRow: View {
     let onPlay: () -> Void
     let onChange: (Track) -> Void
     var onTakeOut: (() -> Void)?
-    @State private var addingToPlaylist = false
+    let onRemove: () -> Void
+    let onAddToPlaylist: () -> Void
 
     var body: some View {
         HStack(spacing: 12) {
@@ -184,6 +211,13 @@ struct TrackRow: View {
                 Label("\(track.rating)", systemImage: "star.fill").labelStyle(.titleAndIcon)
                     .font(.caption2).foregroundStyle(.yellow)
             }
+            if track.state == .new {
+                Button(action: onRemove) {
+                    Image(systemName: "hand.thumbsdown").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Not for me")
+            }
             HeartButton(starred: track.starred) { toggleStar() }
         }
         .swipeActions(edge: .leading) {
@@ -192,17 +226,16 @@ struct TrackRow: View {
             } else {
                 Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: "heart") }.tint(.pink)
             }
-            Button { addingToPlaylist = true } label: { Label("Add to playlist", systemImage: "text.badge.plus") }.tint(.blue)
+            Button(action: onAddToPlaylist) { Label("Add to playlist", systemImage: "text.badge.plus") }.tint(.blue)
         }
         .swipeActions(edge: .trailing) {
             if track.state == .new {
-                Button(role: .destructive) { model.remove(track.songId) } label: { Label("Remove", systemImage: "trash") }
+                Button(role: .destructive, action: onRemove) { Label("Not for me", systemImage: "hand.thumbsdown") }
             } else if track.addedByYou, let onTakeOut {
                 Button(role: .destructive, action: onTakeOut) { Label("Take out", systemImage: "minus.circle") }
             }
         }
         .contextMenu { menu }
-        .sheet(isPresented: $addingToPlaylist) { AddToPlaylistSheet(songId: track.songId, title: track.title) }
     }
 
     @ViewBuilder
@@ -211,7 +244,7 @@ struct TrackRow: View {
             Button { player.playNext(item) } label: { Label("Play next", systemImage: "text.insert") }
             Button { player.addToQueue(item) } label: { Label("Add to queue", systemImage: "text.append") }
         }
-        Button { addingToPlaylist = true } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
+        Button(action: onAddToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
         Divider()
         Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: track.starred ? "heart.slash" : "heart") }
         Menu {
@@ -224,7 +257,7 @@ struct TrackRow: View {
         if track.state == .new {
             Divider()
             Button { keep() } label: { Label("Keep in my library", systemImage: "checkmark.circle") }
-            Button(role: .destructive) { model.remove(track.songId) } label: { Label("Remove from inbox", systemImage: "trash") }
+            Button(role: .destructive, action: onRemove) { Label("Not for me", systemImage: "hand.thumbsdown") }
         }
         if track.addedByYou, let onTakeOut {
             Button(role: .destructive, action: onTakeOut) { Label("Take out of playlist", systemImage: "minus.circle") }

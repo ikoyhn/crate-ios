@@ -3,22 +3,32 @@ import SwiftUI
 
 struct Artwork: View {
     let url: URL?
-    var size: CGFloat = 48
+    /// nil: a square as big as the space it's given (Now Playing).
+    var size: CGFloat? = 48
     var corner: CGFloat = 6
 
     var body: some View {
+        if let size {
+            image.frame(width: size, height: size)
+                .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        } else {
+            Color.clear.aspectRatio(1, contentMode: .fit)
+                .overlay { image }
+                .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
+        }
+    }
+
+    private var image: some View {
         AsyncImage(url: url, transaction: Transaction(animation: .easeOut(duration: 0.2))) { phase in
             if let image = phase.image {
                 image.resizable().aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
                     Rectangle().fill(.quaternary)
-                    Image(systemName: "music.note").foregroundStyle(.secondary).font(.system(size: size * 0.35))
+                    Image(systemName: "music.note").foregroundStyle(.secondary).font(.system(size: (size ?? 120) * 0.35))
                 }
             }
         }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: corner, style: .continuous))
     }
 }
 

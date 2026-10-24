@@ -185,11 +185,16 @@ final class AppModel {
         Task { track(await attempt("Couldn't keep it") { try await $0.keep(songId) }, "Keep") }
     }
 
-    func remove(_ songId: String) {
+    /// Delete an inbox track and block it from coming back. `onFailure` lets a list that hid the
+    /// row straight away put it back.
+    func remove(_ songId: String, title: String? = nil, onFailure: (@MainActor () -> Void)? = nil) {
         Task {
-            guard let r = await attempt("Couldn't remove it", { try await $0.remove(songId) }) else { return }
+            guard let r = await attempt("Couldn't remove it", { try await $0.remove(songId) }) else {
+                onFailure?()
+                return
+            }
             player.removeSong(songId)
-            track(r, "Remove")
+            track(r, title.map { "Removed \($0)" } ?? "Remove")
         }
     }
 

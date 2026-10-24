@@ -7,12 +7,13 @@ for Navidrome. Everything you'd do in Crate's web UI, from your phone, plus a pr
   playlists, with each track's state (New in the inbox, Kept, Added by you).
 * **Curation:** ♥ and ★ ratings on any song, from the list, Now Playing or the lock screen. On a new
   inbox track a ♥ or 4-5 ★ keeps it and 1-2 ★ removes it, straight away rather than at the next
-  15-minute check. Swipe to **Keep** or **Remove**.
+  15-minute check. **👎 Not for me** on a new track (or swipe) deletes it and blocks it from coming
+  back; swipe to **Keep**.
 * **Add to playlist…** on any song (long-press, swipe, or Now Playing): into one of your Navidrome
   playlists, or a new one. Inbox tracks are kept first, so they aren't deleted when they expire.
-* **Suggested songs** for every playlist: 30-second previews of new songs, songs from your library,
-  each with its reason. **Add** (new songs are downloaded first), **👎** with Undo, **Refresh** for
-  a different batch.
+* **Suggested songs** for every playlist: 30-second previews of new songs, plus songs from your
+  library on your own playlists, each with its reason. **Add** (new songs are downloaded first),
+  **👎** with Undo, **Refresh** for a different batch.
 * **Regenerate:** Rebuild now on any playlist, Run now on every job, with progress in a banner,
   **Stop all**, and each run's live log.
 * **Prompt playlists:** describe what you want to hear, choose its size, new songs and weekly
