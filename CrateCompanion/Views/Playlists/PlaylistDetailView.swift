@@ -17,6 +17,7 @@ struct PlaylistDetailView: View {
     @State private var selecting = false
     @State private var selected: [String] = []  // song ids, in the order you ticked them
     @State private var addingSelected = false
+    @State private var confirmDeleteSelected = false
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -50,6 +51,16 @@ struct PlaylistDetailView: View {
         .navigationBarBackButtonHidden(selecting)
         .sheet(isPresented: $addingSelected) {
             AddToPlaylistSheet(songIds: selected) { endSelecting() }
+        }
+        .confirmationDialog("Delete \(selected.count) songs from your library?", isPresented: $confirmDeleteSelected,
+                            titleVisibility: .visible) {
+            Button("Delete \(selected.count) songs", role: .destructive) {
+                model.deleteFromLibrary(selected, label: "Deleting \(selected.count) songs")
+                tracks.removeAll { selected.contains($0.songId) }
+                endSelecting()
+            }
+        } message: {
+            Text("Their files are deleted for good and they leave every playlist. New songs still in the inbox are just removed.")
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
@@ -98,6 +109,10 @@ struct PlaylistDetailView: View {
                     Divider()
                     Button { playSelected(next: false) } label: { Label("Play", systemImage: "play") }
                     Button { playSelected(next: true) } label: { Label("Add to queue", systemImage: "text.append") }
+                    Divider()
+                    Button(role: .destructive) { confirmDeleteSelected = true } label: {
+                        Label("Delete from library…", systemImage: "trash")
+                    }
                 } label: {
                     Label("Actions", systemImage: "ellipsis.circle")
                 }
@@ -238,6 +253,7 @@ struct TrackRow: View {
     let onChange: (Track) -> Void
     var onTakeOut: (() -> Void)?
     @State private var addingToPlaylist = false
+    @State private var confirmDelete = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -284,6 +300,11 @@ struct TrackRow: View {
         }
         .contextMenu { menu }
         .sheet(isPresented: $addingToPlaylist) { AddToPlaylistSheet(songId: track.songId, title: track.title) }
+        .confirmationDialog("Delete \(track.title) from your library?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { model.deleteFromLibrary([track.songId], label: "Deleting \(track.title)") }
+        } message: {
+            Text("The file is deleted for good and the song leaves every playlist.")
+        }
     }
 
     @ViewBuilder
@@ -309,6 +330,10 @@ struct TrackRow: View {
         }
         if track.addedByYou, let onTakeOut {
             Button(role: .destructive, action: onTakeOut) { Label("Take out of playlist", systemImage: "minus.circle") }
+        }
+        if track.state != .new {
+            Divider()
+            Button(role: .destructive) { confirmDelete = true } label: { Label("Delete from library…", systemImage: "trash") }
         }
     }
 

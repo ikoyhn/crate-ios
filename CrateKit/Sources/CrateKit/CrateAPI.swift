@@ -228,6 +228,12 @@ public struct CrateAPI: Sendable {
     /// Star it; an inbox track also moves into your library.
     public func keep(_ songId: String) async throws -> Started { try await send("POST", "/api/songs/\(songId.addingPathEscapes)/keep") }
 
+    /// Delete a song's file from your music library for good (follow the run). An inbox track
+    /// is just removed.
+    public func deleteFromLibrary(_ songId: String) async throws -> Started {
+        try await send("POST", "/api/songs/\(songId.addingPathEscapes)/delete")
+    }
+
     /// Delete an inbox track now.
     public func remove(_ songId: String) async throws -> Started { try await send("POST", "/api/songs/\(songId.addingPathEscapes)/remove") }
 
