@@ -56,7 +56,8 @@ public struct Subsonic: Sendable {
         url("getCoverArt", ["id": id, "size": String(size)])
     }
 
-    func call(_ method: String, _ params: [String: String] = [:]) async throws {
+    @discardableResult
+    func call(_ method: String, _ params: [String: String] = [:]) async throws -> Data {
         var req = URLRequest(url: url(method, params))
         req.timeoutInterval = 30
         let (data, resp) = try await transport.send(req)
@@ -76,6 +77,7 @@ public struct Subsonic: Sendable {
         guard env.body.status == "ok" else {
             throw CrateError.server(status: 200, detail: env.body.error?.message ?? "Navidrome refused")
         }
+        return data
     }
 
     public func ping() async throws { try await call("ping") }
@@ -84,6 +86,35 @@ public struct Subsonic: Sendable {
     public func scrobble(songId: String, submission: Bool, at: Date = Date()) async throws {
         try await call("scrobble", ["id": songId, "submission": String(submission),
                                     "time": String(Int64(at.timeIntervalSince1970 * 1000))])
+    }
+
+    /// Every song you've starred (♥), most recently starred first.
+    public func starredSongs() async throws -> [Track] {
+        struct Envelope: Decodable {
+            struct Body: Decodable {
+                struct Starred: Decodable { let song: [Song]? }
+                let starred2: Starred?
+            }
+            struct Song: Decodable {
+                let id: String
+                let title: String?
+                let artist: String?
+                let album: String?
+                let duration: Int?
+                let starred: String?
+                let userRating: Int?
+                let playCount: Int?
+            }
+            let body: Body
+            enum CodingKeys: String, CodingKey { case body = "subsonic-response" }
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: try await call("getStarred2"))
+        // ISO 8601 dates in one format, so they sort as text
+        let songs = (env.body.starred2?.song ?? []).sorted { ($0.starred ?? "") > ($1.starred ?? "") }
+        return songs.enumerated().map { i, s in
+            Track(pos: i, songId: s.id, artist: s.artist ?? "", title: s.title ?? "", album: s.album ?? "",
+                  starred: true, rating: s.userRating ?? 0, plays: s.playCount ?? 0, duration: s.duration ?? 0)
+        }
     }
 }
 

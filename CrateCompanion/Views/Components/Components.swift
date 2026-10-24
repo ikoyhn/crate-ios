@@ -165,6 +165,7 @@ extension PlaylistKind {
         case .dailyMix: "sun.max"
         case .prompt: "text.bubble"
         case .own: "music.note.list"
+        case .liked: "heart.fill"
         case .other: "music.note"
         }
     }
@@ -175,6 +176,7 @@ extension PlaylistKind {
         case .releaseRadar: .orange
         case .dailyMix: .teal
         case .prompt: .indigo
+        case .liked: .pink
         case .own, .other: .gray
         }
     }

@@ -41,6 +41,8 @@ final class AppModel {
     var connection: Connection?
     private(set) var crate: CrateAPI?
     private(set) var resolver: MediaResolver?
+    /// Navidrome, whenever its password is saved (even when songs stream through Crate): Liked Songs.
+    private(set) var navidrome: Subsonic?
     private(set) var info: ServerInfo?
     var status: Status?
     var toast: Toast?
@@ -76,18 +78,20 @@ final class AppModel {
         UserDefaults.standard.removeObject(forKey: Connection.key)
         Keychain.set(nil, for: "crateToken")
         Keychain.set(nil, for: "navidromePassword")
-        connection = nil; crate = nil; resolver = nil; info = nil; status = nil
+        connection = nil; crate = nil; resolver = nil; navidrome = nil; info = nil; status = nil
     }
 
     private func apply(_ c: Connection, token: String, password: String) {
         guard let url = CrateAPI.normalise(c.crateURL) else { return }
         let api = CrateAPI(baseURL: url, token: token)
-        var nd: Subsonic?
-        if c.useNavidrome, let ndURL = CrateAPI.normalise(c.navidromeURL), !password.isEmpty {
-            nd = Subsonic(baseURL: ndURL, user: c.navidromeUser, password: password)
+        var navidrome: Subsonic?
+        if let ndURL = CrateAPI.normalise(c.navidromeURL), !password.isEmpty {
+            navidrome = Subsonic(baseURL: ndURL, user: c.navidromeUser, password: password)
         }
+        let nd = c.useNavidrome ? navidrome : nil
         connection = c
         crate = api
+        self.navidrome = navidrome
         resolver = MediaResolver(crate: api, navidrome: nd, maxBitRate: c.maxBitRate)
         player.navidrome = nd
         startStatusLoop()

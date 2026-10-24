@@ -137,10 +137,14 @@ public struct Playlist: Codable, Sendable, Identifiable, Hashable {
 }
 
 public enum PlaylistKind: Sendable, Hashable {
-    case discover, releaseRadar, dailyMix, prompt, own, other
+    case discover, releaseRadar, dailyMix, prompt, own, liked, other
+
+    /// Every song you've ♥'d, from Navidrome.
+    public static let likedKey = "liked"
 
     public init(key: String) {
         switch true {
+        case key == PlaylistKind.likedKey: self = .liked
         case key == "discover_weekly", key == "discover": self = .discover
         case key == "release_radar": self = .releaseRadar
         case key.hasPrefix("daily_mix_"): self = .dailyMix
@@ -191,6 +195,22 @@ public struct Track: Codable, Sendable, Identifiable, Hashable {
     enum CodingKeys: String, CodingKey {
         case pos, artist, title, album, state, liked, starred, rating, plays, duration
         case songId = "song_id", addedByYou = "added_by_you"
+    }
+
+    public init(pos: Int, songId: String, artist: String, title: String, album: String, state: TrackState = .library,
+                starred: Bool = false, rating: Int = 0, plays: Int = 0, duration: Int = 0, addedByYou: Bool = false) {
+        self.pos = pos
+        self.songId = songId
+        self.artist = artist
+        self.title = title
+        self.album = album
+        self.state = state
+        self.liked = starred || rating >= 4
+        self.starred = starred
+        self.rating = rating
+        self.plays = plays
+        self.duration = duration
+        self.addedByYou = addedByYou
     }
 
     public init(from decoder: Decoder) throws {
