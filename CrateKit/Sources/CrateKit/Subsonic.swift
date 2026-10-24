@@ -56,7 +56,8 @@ public struct Subsonic: Sendable {
         url("getCoverArt", ["id": id, "size": String(size)])
     }
 
-    func call(_ method: String, _ params: [String: String] = [:]) async throws {
+    @discardableResult
+    func call(_ method: String, _ params: [String: String] = [:]) async throws -> Data {
         var req = URLRequest(url: url(method, params))
         req.timeoutInterval = 30
         let (data, resp) = try await transport.send(req)
@@ -76,6 +77,7 @@ public struct Subsonic: Sendable {
         guard env.body.status == "ok" else {
             throw CrateError.server(status: 200, detail: env.body.error?.message ?? "Navidrome refused")
         }
+        return data
     }
 
     public func ping() async throws { try await call("ping") }
@@ -85,6 +87,215 @@ public struct Subsonic: Sendable {
         try await call("scrobble", ["id": songId, "submission": String(submission),
                                     "time": String(Int64(at.timeIntervalSince1970 * 1000))])
     }
+
+    /// Every song you've starred (♥), most recently starred first.
+    public func starredSongs() async throws -> [Track] {
+        struct Body: Decodable {
+            struct Starred: Decodable { let song: [SubsonicSong]? }
+            let starred2: Starred?
+        }
+        let songs = try await decode(Body.self, call("getStarred2")).starred2?.song ?? []
+        // ISO 8601 dates in one format, so they sort as text
+        return tracks(songs.sorted { ($0.starred ?? "") > ($1.starred ?? "") })
+    }
+
+    /// Albums for Home. type: recent (recently played), newest (recently added), frequent, random, highest.
+    public func albums(_ type: String, size: Int = 20) async throws -> [NavidromeAlbum] {
+        struct Body: Decodable {
+            struct List: Decodable { let album: [NavidromeAlbum]? }
+            let albumList2: List?
+        }
+        return try await decode(Body.self, call("getAlbumList2", ["type": type, "size": String(size)])).albumList2?.album ?? []
+    }
+
+    /// An album's songs, in disc and track order.
+    public func albumSongs(_ albumId: String) async throws -> [Track] {
+        struct Body: Decodable {
+            struct Album: Decodable { let song: [SubsonicSong]? }
+            let album: Album?
+        }
+        return tracks(try await decode(Body.self, call("getAlbum", ["id": albumId])).album?.song ?? [])
+    }
+
+    /// Songs like this one (needs an agent such as Last.fm set up in Navidrome; empty otherwise).
+    public func similarSongs(_ songId: String, count: Int = 20) async throws -> [Track] {
+        struct Body: Decodable {
+            struct List: Decodable { let song: [SubsonicSong]? }
+            let similarSongs2: List?
+        }
+        return tracks(try await decode(Body.self, call("getSimilarSongs2", ["id": songId, "count": String(count)])).similarSongs2?.song ?? [])
+    }
+
+    /// Songs in your library matching a search.
+    public func searchSongs(_ query: String, count: Int = 25) async throws -> [Track] {
+        struct Body: Decodable {
+            struct Result: Decodable { let song: [SubsonicSong]? }
+            let searchResult3: Result?
+        }
+        let params = ["query": query, "songCount": String(count), "artistCount": "0", "albumCount": "0"]
+        return tracks(try await decode(Body.self, call("search3", params)).searchResult3?.song ?? [])
+    }
+
+    /// Artists in your library matching a search.
+    public func searchArtists(_ query: String, count: Int = 10) async throws -> [NavidromeArtist] {
+        struct Body: Decodable {
+            struct Result: Decodable { let artist: [NavidromeArtist]? }
+            let searchResult3: Result?
+        }
+        let params = ["query": query, "songCount": "0", "artistCount": String(count), "albumCount": "0"]
+        return try await decode(Body.self, call("search3", params)).searchResult3?.artist ?? []
+    }
+
+    /// An artist's albums in your library, newest first.
+    public func artistAlbums(_ artistId: String) async throws -> [NavidromeAlbum] {
+        struct Body: Decodable {
+            struct Artist: Decodable { let album: [NavidromeAlbum]? }
+            let artist: Artist?
+        }
+        let albums = try await decode(Body.self, call("getArtist", ["id": artistId])).artist?.album ?? []
+        return albums.sorted { ($0.year ?? 0) > ($1.year ?? 0) }
+    }
+
+    /// The library copy of a song you added (Deezer and your tags may differ a little).
+    public func findSong(artist: String, title: String) async throws -> Track? {
+        func norm(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        for query in ["\(artist) \(title)", title] {
+            let songs = try await searchSongs(query, count: 20)
+            if let hit = songs.first(where: { norm($0.title) == norm(title) && norm($0.artist).contains(norm(artist).prefix(6)) })
+                ?? songs.first(where: { norm($0.title).hasPrefix(norm(title)) || norm(title).hasPrefix(norm($0.title)) }) {
+                return hit
+            }
+        }
+        return nil
+    }
+
+    public func randomSongs(count: Int = 20) async throws -> [Track] {
+        struct Body: Decodable {
+            struct List: Decodable { let song: [SubsonicSong]? }
+            let randomSongs: List?
+        }
+        return tracks(try await decode(Body.self, call("getRandomSongs", ["size": String(count)])).randomSongs?.song ?? [])
+    }
+
+    /// Cover art ids of the first `limit` different albums in a playlist, for its tiled icon.
+    public func playlistCovers(_ playlistId: String, limit: Int = 4) async throws -> [String] {
+        struct Body: Decodable {
+            struct Playlist: Decodable { let entry: [SubsonicSong]? }
+            let playlist: Playlist?
+        }
+        var seen = Set<String>(), covers: [String] = []
+        for song in try await decode(Body.self, call("getPlaylist", ["id": playlistId])).playlist?.entry ?? [] {
+            guard let cover = song.coverArt ?? song.albumId, seen.insert(song.albumId ?? cover).inserted else { continue }
+            covers.append(cover)
+            if covers.count == limit { break }
+        }
+        return covers
+    }
+
+    /// Your most played songs and the songs you played last. Subsonic has neither, so this uses
+    /// Navidrome's own API (the one its web UI uses), signing in with the same user.
+    public func playStats(count: Int = 20) async throws -> PlayStats {
+        var login = URLRequest(url: baseURL.appendingPathComponent("auth/login"))
+        login.httpMethod = "POST"
+        login.timeoutInterval = 30
+        login.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        login.httpBody = try JSONEncoder().encode(["username": user, "password": password])
+        let (data, resp) = try await transport.send(login)
+        struct Session: Decodable { let token: String }
+        guard resp.statusCode == 200, let token = try? JSONDecoder().decode(Session.self, from: data).token else {
+            throw CrateError.server(status: resp.statusCode, detail: "Navidrome didn't accept the sign-in for play history")
+        }
+
+        async let top = nativeSongs(token: token, sortedBy: "play_count", count: count)
+        async let recent = nativeSongs(token: token, sortedBy: "play_date", count: count)
+        func played(_ songs: [NativeSong]) -> [Track] {
+            songs.filter { ($0.playCount ?? 0) > 0 }.enumerated().map { i, s in
+                Track(pos: i, songId: s.id, artist: s.artist ?? "", title: s.title ?? "", album: s.album ?? "",
+                      starred: s.starred ?? false, rating: s.rating ?? 0, plays: s.playCount ?? 0,
+                      duration: Int(s.duration ?? 0))
+            }
+        }
+        return PlayStats(top: played(try await top), recent: played(try await recent))
+    }
+
+    func nativeSongs(token: String, sortedBy sort: String, count: Int) async throws -> [NativeSong] {
+        var comps = URLComponents(url: baseURL.appendingPathComponent("api/song"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "_sort", value: sort), URLQueryItem(name: "_order", value: "DESC"),
+                            URLQueryItem(name: "_start", value: "0"), URLQueryItem(name: "_end", value: String(count))]
+        var req = URLRequest(url: comps.url!)
+        req.timeoutInterval = 30
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "X-ND-Authorization")
+        let (data, resp) = try await transport.send(req)
+        guard resp.statusCode == 200 else {
+            throw CrateError.server(status: resp.statusCode, detail: "Navidrome answered \(resp.statusCode)")
+        }
+        return try JSONDecoder().decode([NativeSong].self, from: data)
+    }
+
+    // MARK: - decoding
+
+    func decode<T: Decodable>(_ type: T.Type, _ data: Data) throws -> T {
+        try JSONDecoder().decode(SubsonicEnvelope<T>.self, from: data).body
+    }
+
+    func tracks(_ songs: [SubsonicSong]) -> [Track] {
+        songs.enumerated().map { i, s in
+            Track(pos: i, songId: s.id, artist: s.artist ?? "", title: s.title ?? "", album: s.album ?? "",
+                  starred: s.starred != nil, rating: s.userRating ?? 0, plays: s.playCount ?? 0, duration: s.duration ?? 0)
+        }
+    }
+}
+
+struct SubsonicEnvelope<T: Decodable>: Decodable {
+    let body: T
+    enum CodingKeys: String, CodingKey { case body = "subsonic-response" }
+}
+
+/// A song as Subsonic describes it.
+struct SubsonicSong: Decodable {
+    let id: String
+    let title: String?
+    let artist: String?
+    let album: String?
+    let albumId: String?
+    let coverArt: String?
+    let duration: Int?
+    let starred: String?
+    let userRating: Int?
+    let playCount: Int?
+}
+
+/// A song from Navidrome's own API.
+struct NativeSong: Decodable, Sendable {
+    let id: String
+    let title: String?
+    let artist: String?
+    let album: String?
+    let duration: Double?
+    let playCount: Int?
+    let starred: Bool?
+    let rating: Int?
+}
+
+public struct NavidromeAlbum: Decodable, Sendable, Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let artist: String?
+    public let coverArt: String?
+    public let year: Int?
+    public let songCount: Int?
+}
+
+public struct NavidromeArtist: Decodable, Sendable, Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let albumCount: Int?
+    public let coverArt: String?
+}
+
+public struct PlayStats: Sendable {
+    public let top: [Track]
+    public let recent: [Track]
 }
 
 /// RFC 1321 MD5, only for Subsonic's token auth (CryptoKit's Insecure.MD5 isn't on Linux).

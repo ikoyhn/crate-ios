@@ -22,18 +22,30 @@ final class AudioPlayer {
     @ObservationIgnored var navidrome: Subsonic?
     /// Lock-screen heart: (item, starred).
     @ObservationIgnored var onLike: ((PlayableItem, Bool) -> Void)?
+    /// A song that couldn't be played, as a message to show.
+    @ObservationIgnored var onError: ((String) -> Void)?
 
-    @ObservationIgnored private let player = AVPlayer()
+    @ObservationIgnored private let player: AVPlayer
+    /// Ties the lock screen / Control Centre player to our AVPlayer, so iOS knows Crate is the app
+    /// behind it (and opens Crate when you tap it). Its info and command centres replace the shared ones.
+    @ObservationIgnored private let nowPlaying: MPNowPlayingSession
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
     @ObservationIgnored private var statusObservation: NSKeyValueObservation?
+    @ObservationIgnored private var itemObservation: NSKeyValueObservation?
+    @ObservationIgnored private let deezer = Deezer()
+    /// Bumped on every load, so a slow preview lookup can't start a song you've since skipped.
+    @ObservationIgnored private var loads = 0
     @ObservationIgnored private var scrobbled = false
     @ObservationIgnored private var artwork: (URL, MPMediaItemArtwork)?
     @ObservationIgnored private var sessionActive = false
 
     init() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio, options: [])
+        let avPlayer = AVPlayer()
+        player = avPlayer
+        nowPlaying = MPNowPlayingSession(players: [avPlayer])
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
         player.automaticallyWaitsToMinimizeStalling = true
         observePlayer()
         setupRemoteCommands()
@@ -69,10 +81,11 @@ final class AudioPlayer {
 
     func stop() {
         player.pause()
+        loads += 1
         player.replaceCurrentItem(with: nil)
         queue = PlayQueue()
         elapsed = 0; duration = 0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        nowPlaying.nowPlayingInfoCenter.nowPlayingInfo = nil
     }
 
     func next() {
@@ -102,7 +115,7 @@ final class AudioPlayer {
     /// Reflect a like / keep on the queue (and the lock screen's heart).
     func update(songId: String, _ change: (inout PlayableItem) -> Void) {
         queue.update(songId: songId, change)
-        MPRemoteCommandCenter.shared().likeCommand.isActive = current?.starred ?? false
+        nowPlaying.remoteCommandCenter.likeCommand.isActive = current?.starred ?? false
     }
 
     /// A removed inbox track is deleted from the server: skip it if it's playing, drop it otherwise.
@@ -119,10 +132,20 @@ final class AudioPlayer {
         scrobbled = false
         elapsed = 0
         duration = Double(item.duration)
-        let playerItem = AVPlayerItem(url: item.streamURL)
-        playerItem.preferredForwardBufferDuration = 10
-        player.replaceCurrentItem(with: playerItem)
-        if autoplay { activateSession(); player.play() }
+        loads += 1
+        let load = loads
+        if case .preview(let deezerId) = item.source {
+            // The saved preview link has probably expired: ask Deezer for a fresh one first
+            player.replaceCurrentItem(with: nil)
+            isBuffering = autoplay
+            Task {
+                let url = await deezer.previewURL(trackId: deezerId) ?? item.streamURL
+                guard load == loads else { return }
+                start(url, title: item.title, autoplay: autoplay)
+            }
+        } else {
+            start(item.streamURL, title: item.title, autoplay: autoplay)
+        }
         updateNowPlaying()
         loadArtwork(for: item)
         if let id = item.songId, let nd = navidrome {
@@ -130,7 +153,24 @@ final class AudioPlayer {
         }
     }
 
+    private func start(_ url: URL, title: String, autoplay: Bool) {
+        let playerItem = AVPlayerItem(url: url)
+        playerItem.preferredForwardBufferDuration = 10
+        itemObservation = playerItem.observe(\.status, options: [.new]) { [weak self] item, _ in
+            guard item.status == .failed else { return }
+            let reason = item.error?.localizedDescription ?? "unknown error"
+            Task { @MainActor in
+                guard let self, self.player.currentItem === item else { return }
+                self.isBuffering = false
+                self.onError?("Couldn't play \(title): \(reason)")
+            }
+        }
+        player.replaceCurrentItem(with: playerItem)
+        if autoplay { activateSession(); player.play() }
+    }
+
     private func activateSession() {
+        nowPlaying.becomeActiveIfPossible()  // back in front of the lock screen if another app took it
         guard !sessionActive else { return }
         // Activated on first play rather than at launch, so opening the app doesn't stop other audio
         sessionActive = (try? AVAudioSession.sharedInstance().setActive(true)) != nil
@@ -201,7 +241,7 @@ final class AudioPlayer {
     // MARK: - lock screen
 
     private func setupRemoteCommands() {
-        let cc = MPRemoteCommandCenter.shared()
+        let cc = nowPlaying.remoteCommandCenter
         // Remote commands arrive on the main thread
         func on(_ command: MPRemoteCommand, _ action: @escaping @MainActor (AudioPlayer, MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus) {
             command.addTarget { [weak self] event in
@@ -232,7 +272,7 @@ final class AudioPlayer {
 
     private func updateNowPlaying() {
         guard let item = current else {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            nowPlaying.nowPlayingInfoCenter.nowPlayingInfo = nil
             return
         }
         var info: [String: Any] = [
@@ -245,8 +285,8 @@ final class AudioPlayer {
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
         if let art = artwork, art.0 == item.artworkURL { info[MPMediaItemPropertyArtwork] = art.1 }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        let cc = MPRemoteCommandCenter.shared()
+        nowPlaying.nowPlayingInfoCenter.nowPlayingInfo = info
+        let cc = nowPlaying.remoteCommandCenter
         cc.likeCommand.isEnabled = item.songId != nil
         cc.likeCommand.isActive = item.starred
     }

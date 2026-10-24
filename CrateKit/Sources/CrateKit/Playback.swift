@@ -20,12 +20,19 @@ public struct PlayableItem: Sendable, Identifiable, Hashable {
     public var isInbox: Bool
     public var starred: Bool
     public var rating: Int
+    /// Played from a playlist's suggestions rather than from the playlist.
+    public var isSuggestion = false
 
     public var songId: String? {
         if case .library(let id) = source { return id }
         return nil
     }
     public var isPreview: Bool { songId == nil }
+
+    /// Suggested for one of your own playlists: liking it adds it to that playlist too.
+    public var likeAddsTo: String? {
+        isSuggestion && playlistKey?.hasPrefix("nd:") == true ? playlistKey : nil
+    }
 }
 
 /// Turns Crate's tracks and suggestions into playable items. With Navidrome credentials, songs
@@ -63,12 +70,12 @@ public struct MediaResolver: Sendable {
             guard let id = s.songId, let url = stream(songId: id) else { return nil }
             return PlayableItem(id: "t:\(id)", source: .library(songId: id), title: s.title, artist: s.artist,
                                 album: s.album, duration: s.duration, streamURL: url, artworkURL: artwork(songId: id),
-                                playlistKey: playlistKey, isInbox: false, starred: false, rating: 0)
+                                playlistKey: playlistKey, isInbox: false, starred: false, rating: 0, isSuggestion: true)
         case .new:
             guard let did = s.deezerId, let url = crate.mediaURL(s.preview) else { return nil }
             return PlayableItem(id: "p:\(did)", source: .preview(deezerId: did), title: s.title, artist: s.artist,
                                 album: s.album, duration: 30, streamURL: url, artworkURL: crate.mediaURL(s.cover),
-                                playlistKey: playlistKey, isInbox: false, starred: false, rating: 0)
+                                playlistKey: playlistKey, isInbox: false, starred: false, rating: 0, isSuggestion: true)
         }
     }
 

@@ -4,6 +4,8 @@ import SwiftUI
 struct MiniPlayer: View {
     @Environment(AudioPlayer.self) private var player
     @Environment(AppModel.self) private var model
+    /// Room scrolling content leaves for it.
+    static let height: CGFloat = 64
 
     var body: some View {
         if let item = player.current {
@@ -16,7 +18,7 @@ struct MiniPlayer: View {
                 }
                 Spacer(minLength: 0)
                 if item.songId != nil {
-                    HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred) }
+                    HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred, addTo: item.likeAddsTo) }
                         .font(.title3)
                 }
                 Button { player.toggle() } label: {
@@ -146,7 +148,7 @@ struct NowPlayingView: View {
     private func curation(_ item: PlayableItem) -> some View {
         VStack(spacing: 12) {
             HStack(spacing: 20) {
-                HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred) }
+                HeartButton(starred: item.starred) { model.setStar(item.songId, !item.starred, addTo: item.likeAddsTo) }
                     .font(.title2)
                 StarRating(rating: item.rating) { model.setRating(item.songId, $0) }
                 Spacer(minLength: 0)

@@ -3,6 +3,11 @@
 A native iPhone companion app for [Crate](../crate), the self-hosted, Spotify-style playlist curator
 for Navidrome. Everything you'd do in Crate's web UI, from your phone, plus a proper music player.
 
+* **Home:** Up Next (songs like the one playing), recently played and recently added albums,
+  frequently played albums, random albums, your top played songs and your song history, all
+  from Navidrome. Top played and history use Navidrome's own API, so they need Navidrome itself
+  rather than another Subsonic server.
+* **Liked Songs:** every song you've ♥'d, newest first.
 * **Playlists:** Discover Weekly, Release Radar, Daily Mixes, prompt playlists and your own Navidrome
   playlists, with each track's state (New in the inbox, Kept, Added by you).
 * **Curation:** ♥ and ★ ratings on any song, from the list, Now Playing or the lock screen. On a new

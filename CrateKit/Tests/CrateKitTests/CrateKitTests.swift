@@ -124,6 +124,19 @@ final class StubTransport: HTTPTransport, @unchecked Sendable {
     }
 }
 
+/// Answers by path; anything else is a 404.
+final class RouteTransport: HTTPTransport, @unchecked Sendable {
+    let routes: [String: String]
+    var last: URLRequest?
+    init(_ routes: [String: String]) { self.routes = routes }
+
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        last = request
+        let body = routes[request.url!.path]
+        return (Data((body ?? "").utf8), HTTPURLResponse(url: request.url!, statusCode: body == nil ? 404 : 200, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
 final class ClientTests: XCTestCase {
     func api(_ t: StubTransport) -> CrateAPI { CrateAPI(baseURL: URL(string: "http://c:8090")!, token: "tok", transport: t) }
 
@@ -170,6 +183,62 @@ final class ClientTests: XCTestCase {
         try await api(t).refreshSuggestions("discover_weekly", excluding: s.items)
         let body = try JSONSerialization.jsonObject(with: XCTUnwrap(t.last?.httpBody)) as? [String: [String]]
         XCTAssertEqual(body?["exclude"], ["916424", "s7"])
+    }
+
+    func testStarredSongs() async throws {
+        let t = StubTransport(200, #"""
+        {"subsonic-response": {"status": "ok", "version": "1.16.1", "starred2": {"song": [
+          {"id": "a", "title": "Old", "artist": "X", "album": "Y", "duration": 200, "starred": "2024-01-01T10:00:00Z"},
+          {"id": "b", "title": "New", "artist": "Z", "album": "W", "duration": 180, "starred": "2025-06-01T10:00:00Z", "userRating": 5}
+        ]}}}
+        """#)
+        let nd = Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: t)
+        let songs = try await nd.starredSongs()
+        XCTAssertEqual(songs.map(\.songId), ["b", "a"])
+        XCTAssertEqual(songs[0].rating, 5)
+        XCTAssertTrue(songs.allSatisfy(\.starred))
+        XCTAssertEqual(t.last?.url?.path, "/rest/getStarred2")
+        let none = StubTransport(200, #"{"subsonic-response": {"status": "ok", "starred2": {}}}"#)
+        let empty = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: none).starredSongs()
+        XCTAssertEqual(empty.count, 0)
+        XCTAssertEqual(PlaylistKind(key: PlaylistKind.likedKey), .liked)
+    }
+
+    func testHomeLists() async throws {
+        let albums = StubTransport(200, #"{"subsonic-response": {"status": "ok", "albumList2": {"album": [{"id": "al1", "name": "Bloom", "artist": "Beach House", "coverArt": "al-al1", "songCount": 10}]}}}"#)
+        let a = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: albums).albums("newest", size: 5)
+        XCTAssertEqual(a.first?.name, "Bloom")
+        XCTAssertTrue(albums.last?.url?.query?.contains("type=newest") ?? false)
+
+        let pl = StubTransport(200, #"""
+        {"subsonic-response": {"status": "ok", "playlist": {"entry": [
+          {"id": "1", "albumId": "A", "coverArt": "al-A"}, {"id": "2", "albumId": "A", "coverArt": "al-A"},
+          {"id": "3", "albumId": "B", "coverArt": "al-B"}, {"id": "4", "albumId": "C"}
+        ]}}}
+        """#)
+        let covers = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: pl).playlistCovers("p1")
+        XCTAssertEqual(covers, ["al-A", "al-B", "C"])
+    }
+
+    func testPlayStats() async throws {
+        let t = RouteTransport([
+            "/auth/login": #"{"token": "jwt", "name": "u"}"#,
+            "/api/song": #"[{"id": "s1", "title": "A", "playCount": 9, "duration": 201.5, "starred": true}, {"id": "s2", "playCount": 0}]"#,
+        ])
+        let stats = try await Subsonic(baseURL: URL(string: "http://nd")!, user: "u", password: "p", transport: t).playStats(count: 5)
+        XCTAssertEqual(stats.top.map(\.songId), ["s1"])
+        XCTAssertEqual(stats.top.first?.duration, 201)
+        XCTAssertEqual(stats.recent.first?.plays, 9)
+        XCTAssertEqual(t.last?.value(forHTTPHeaderField: "X-ND-Authorization"), "Bearer jwt")
+    }
+
+    func testFreshDeezerPreview() async {
+        let t = StubTransport(200, #"{"id": 916424, "preview": "https://cdnt-preview.dzcdn.net/new.mp3?hdnea=exp=1"}"#)
+        let url = await Deezer(transport: t).previewURL(trackId: 916424)
+        XCTAssertEqual(url?.absoluteString, "https://cdnt-preview.dzcdn.net/new.mp3?hdnea=exp=1")
+        XCTAssertEqual(t.last?.url?.absoluteString, "https://api.deezer.com/track/916424")
+        let missing = await Deezer(transport: StubTransport(200, #"{"error": {"code": 800}}"#)).previewURL(trackId: 1)
+        XCTAssertNil(missing)
     }
 }
 

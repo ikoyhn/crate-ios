@@ -1,12 +1,15 @@
 import CrateKit
 import SwiftUI
 
-/// Search Deezer's catalogue and add songs or albums to your library (Crate downloads them).
+/// Search your library (songs play in full) and Deezer's catalogue, to add songs or albums to
+/// your library (Crate downloads them).
 struct SearchView: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
     @State private var query = ""
     @State private var results: SearchResults?
+    @State private var library: [Track] = []
+    @State private var artists: [NavidromeArtist] = []
     @State private var searching = false
     @State private var wants: [Want] = []
 
@@ -14,8 +17,32 @@ struct SearchView: View {
         NavigationStack {
             List {
                 if let results {
-                    if results.tracks.isEmpty && results.albums.isEmpty {
+                    if results.tracks.isEmpty && results.albums.isEmpty && library.isEmpty && artists.isEmpty {
                         ContentUnavailableView.search(text: query)
+                    }
+                    if !artists.isEmpty {
+                        Section("Artists") {
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(alignment: .top, spacing: 14) {
+                                    ForEach(artists) { a in
+                                        NavigationLink(value: a) { ArtistTile(artist: a) }.buttonStyle(.plain)
+                                    }
+                                }
+                                .padding(.vertical, 4)
+                            }
+                            .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                        }
+                    }
+                    if !library.isEmpty {
+                        Section("In your library") {
+                            ForEach(Array(library.prefix(8).enumerated()), id: \.element.id) { i, t in
+                                TrackRow(track: t, playlistKey: nil, isCurrent: player.current?.songId == t.songId,
+                                         onPlay: { playLibrary(from: i) },
+                                         onChange: { updated in
+                                             if let j = library.firstIndex(where: { $0.id == t.id }) { library[j] = updated }
+                                         })
+                            }
+                        }
                     }
                     if !results.albums.isEmpty {
                         Section("Albums") {
@@ -31,7 +58,7 @@ struct SearchView: View {
                         }
                     }
                     if !results.tracks.isEmpty {
-                        Section("Songs") {
+                        Section(library.isEmpty ? "Songs" : "More songs") {
                             ForEach(results.tracks) { CatalogTrackRow(track: $0, want: want(for: $0), onAdd: add) }
                         }
                     }
@@ -46,6 +73,8 @@ struct SearchView: View {
             }
             .navigationTitle("Search")
             .navigationDestination(for: CatalogAlbum.self) { AlbumView(album: $0, wants: wants, onAdd: add) }
+            .navigationDestination(for: NavidromeArtist.self) { ArtistView(artist: $0) }
+            .navigationDestination(for: NavidromeAlbum.self) { LibraryAlbumView(album: $0) }
             .searchable(text: $query, prompt: "Songs, albums, artists")
             .overlay { if searching { ProgressView() } }
             .task(id: query) { await search() }
@@ -63,7 +92,24 @@ struct SearchView: View {
         guard !Task.isCancelled else { return }
         searching = true
         defer { searching = false }
-        if let r = await model.attempt("Search failed", { try await $0.search(q) }), !Task.isCancelled { results = r }
+        let nd = model.navidrome
+        async let mine = nd?.searchSongs(q)
+        async let theirs = nd?.searchArtists(q)
+        var r: SearchResults?
+        var failure: Error?
+        do { r = try await model.crate?.search(q) } catch { failure = error }
+        let found = (try? await mine) ?? nil
+        let foundArtists = (try? await theirs) ?? nil
+        // typing again cancels this search, which ends in an error: only a real failure is worth saying
+        guard !Task.isCancelled else { return }
+        if let failure { model.say("Search failed: \(failure.localizedDescription)") }
+        library = found ?? []
+        artists = foundArtists ?? []
+        if let r { results = r } else if found != nil { results = SearchResults(tracks: [], albums: []) }
+    }
+
+    private func playLibrary(from index: Int) {
+        player.play(library.compactMap { model.resolver?.item($0, playlistKey: nil) }, startAt: index)
     }
 
     private func loadWants() async {
@@ -94,21 +140,18 @@ struct CatalogTrackRow: View {
     let track: CatalogTrack
     let want: Want?
     let onAdd: (CatalogTrack) -> Void
+    @Environment(\.pickPlaylist) private var pickPlaylist
 
     var body: some View {
         HStack(spacing: 12) {
-            Button {
-                if let item = model.resolver?.item(track) { player.play(item) }
-            } label: {
-                ZStack {
-                    Artwork(url: URL(string: track.cover), size: 44)
-                    if !track.preview.isEmpty {
-                        Image(systemName: "play.fill").font(.caption2).foregroundStyle(.white)
-                            .padding(5).background(.black.opacity(0.45), in: Circle())
-                    }
+            ZStack {
+                Artwork(url: URL(string: track.cover), size: 44)
+                if !track.preview.isEmpty {
+                    Image(systemName: isCurrent && player.isPlaying ? "speaker.wave.2.fill" : "play.fill")
+                        .font(.caption2).foregroundStyle(.white)
+                        .padding(5).background(.black.opacity(0.45), in: Circle())
                 }
             }
-            .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title).lineLimit(1)
                 Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -117,21 +160,70 @@ struct CatalogTrackRow: View {
             Text(track.duration.mmss).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             status
         }
+        // Tap anywhere on the row to play (or pause) it: in full if you have it, else its preview.
+        // The + button keeps its own tap.
+        .contentShape(Rectangle())
+        .onTapGesture(perform: playOrPause)
+        .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play", playOrPause)
+        .swipeActions(edge: .leading) {
+            // a song you have is found in your library; a new one is downloaded first
+            Button { pickPlaylist(PlaylistPick(song: .new(deezerId: track.deezerId), title: track.title)) } label: {
+                Label("Playlist", systemImage: "text.badge.plus")
+            }
+            .tint(.blue)
+        }
+    }
+
+    private var have: Bool { track.owned || want?.succeeded == true }
+
+    private var isCurrent: Bool {
+        guard let current = player.current else { return false }
+        return current.id == "p:\(track.deezerId)"
+            || (current.songId != nil && current.title == track.title && current.artist == track.artist)
+    }
+
+    private func playOrPause() {
+        if isCurrent { player.toggle(); return }
+        Task {
+            if have, let item = await model.libraryItem(artist: track.artist, title: track.title) {
+                player.play(item)
+            } else if let item = model.resolver?.item(track) {
+                player.play(item)
+            }
+        }
     }
 
     @ViewBuilder
     private var status: some View {
-        if track.owned || want?.succeeded == true {
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("In your library")
-        } else if want?.isBusy == true {
+        if want?.isBusy == true {
             ProgressView().controlSize(.small)
+        } else if want?.status == "failed" && !track.owned {
+            Button { onAdd(track) } label: { Image(systemName: "arrow.clockwise.circle").font(.title3) }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Try again")
+        } else if have {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("In your library")
         } else {
-            Button { onAdd(track) } label: {
-                Image(systemName: want?.status == "failed" ? "arrow.clockwise.circle" : "plus.circle").font(.title3)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(want?.status == "failed" ? "Try again" : "Add to library")
+            Button { onAdd(track) } label: { Image(systemName: "plus.circle").font(.title3) }
+                .buttonStyle(.borderless)
+                .accessibilityLabel("Save to my library")
         }
+    }
+}
+
+/// An artist in your library, in the search results.
+struct ArtistTile: View {
+    @Environment(AppModel.self) private var model
+    let artist: NavidromeArtist
+    var body: some View {
+        VStack(spacing: 4) {
+            Artwork(url: model.navidrome?.coverURL(id: artist.coverArt ?? artist.id, size: 300), size: 96, corner: 48)
+            Text(artist.name).font(.caption.weight(.medium)).lineLimit(1)
+            if let n = artist.albumCount {
+                Text("\(n) album\(n == 1 ? "" : "s")").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 100)
     }
 }
 
@@ -199,15 +291,38 @@ struct AlbumView: View {
     }
 }
 
+/// A song you added. Once it's downloaded, tap it to play it from your library.
 struct WantRow: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AudioPlayer.self) private var player
     let want: Want
     let retry: () -> Void
 
+    private var isCurrent: Bool {
+        player.current?.songId != nil && player.current?.title == want.title && player.current?.artist == want.artist
+    }
+
     var body: some View {
+        row
+            .contentShape(Rectangle())
+            .onTapGesture { play() }
+    }
+
+    private func play() {
+        guard want.succeeded else { return }
+        if isCurrent { player.toggle(); return }
+        Task {
+            if let item = await model.libraryItem(artist: want.artist, title: want.title) { player.play(item) }
+            else { model.say("Couldn't find \(want.title) in your library yet") }
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 12) {
             Artwork(url: want.cover.flatMap(URL.init(string:)), size: 40)
             VStack(alignment: .leading, spacing: 2) {
                 Text(want.title).lineLimit(1)
+                    .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
                 Text(want.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 if want.status == "failed", let d = want.detail, !d.isEmpty {
                     Text(d).font(.caption2).foregroundStyle(.red).lineLimit(2)

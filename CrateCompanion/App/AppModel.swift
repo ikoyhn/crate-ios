@@ -41,6 +41,8 @@ final class AppModel {
     var connection: Connection?
     private(set) var crate: CrateAPI?
     private(set) var resolver: MediaResolver?
+    /// Navidrome, whenever its password is saved (even when songs stream through Crate): Liked Songs.
+    private(set) var navidrome: Subsonic?
     private(set) var info: ServerInfo?
     var status: Status?
     var toast: Toast?
@@ -50,12 +52,15 @@ final class AppModel {
     let player = AudioPlayer()
 
     @ObservationIgnored private var statusTask: Task<Void, Never>?
+    /// Navidrome playlist id -> cover art ids of its first four albums.
+    @ObservationIgnored private var playlistCoverCache: [String: [String]] = [:]
 
     init() {
         if let saved = Connection.load() {
             apply(saved, token: Keychain.get("crateToken") ?? "", password: Keychain.get("navidromePassword") ?? "")
         }
-        player.onLike = { [weak self] item, starred in self?.setStar(item.songId, starred) }
+        player.onLike = { [weak self] item, starred in self?.setStar(item.songId, starred, addTo: item.likeAddsTo) }
+        player.onError = { [weak self] message in self?.say(message) }
     }
 
     var isConnected: Bool { crate != nil }
@@ -75,18 +80,20 @@ final class AppModel {
         UserDefaults.standard.removeObject(forKey: Connection.key)
         Keychain.set(nil, for: "crateToken")
         Keychain.set(nil, for: "navidromePassword")
-        connection = nil; crate = nil; resolver = nil; info = nil; status = nil
+        connection = nil; crate = nil; resolver = nil; navidrome = nil; info = nil; status = nil
     }
 
     private func apply(_ c: Connection, token: String, password: String) {
         guard let url = CrateAPI.normalise(c.crateURL) else { return }
         let api = CrateAPI(baseURL: url, token: token)
-        var nd: Subsonic?
-        if c.useNavidrome, let ndURL = CrateAPI.normalise(c.navidromeURL), !password.isEmpty {
-            nd = Subsonic(baseURL: ndURL, user: c.navidromeUser, password: password)
+        var navidrome: Subsonic?
+        if let ndURL = CrateAPI.normalise(c.navidromeURL), !password.isEmpty {
+            navidrome = Subsonic(baseURL: ndURL, user: c.navidromeUser, password: password)
         }
+        let nd = c.useNavidrome ? navidrome : nil
         connection = c
         crate = api
+        self.navidrome = navidrome
         resolver = MediaResolver(crate: api, navidrome: nd, maxBitRate: c.maxBitRate)
         player.navidrome = nd
         startStatusLoop()
@@ -108,6 +115,22 @@ final class AppModel {
 
     func refreshStatus() async {
         if let api = crate, let s = try? await api.status() { status = s }
+    }
+
+    /// For a playlist's tiled icon. Cached until the playlists are next reloaded.
+    func playlistCovers(_ playlistId: String) async -> [String] {
+        if let cached = playlistCoverCache[playlistId] { return cached }
+        guard let nd = navidrome, let covers = try? await nd.playlistCovers(playlistId) else { return [] }
+        playlistCoverCache[playlistId] = covers
+        return covers
+    }
+
+    func forgetPlaylistCovers() { playlistCoverCache = [:] }
+
+    /// A song you've downloaded, found in your library so it plays in full rather than as a preview.
+    func libraryItem(artist: String, title: String) async -> PlayableItem? {
+        guard let nd = navidrome, let track = try? await nd.findSong(artist: artist, title: title) else { return nil }
+        return resolver?.item(track, playlistKey: nil)
     }
 
     // MARK: - feedback
@@ -149,18 +172,21 @@ final class AppModel {
 
     // MARK: - song actions (shared by rows, Now Playing and the lock screen)
 
-    func setStar(_ songId: String?, _ starred: Bool) {
+    /// addTo: a song suggested for one of your playlists goes into it when you like it.
+    func setStar(_ songId: String?, _ starred: Bool, addTo playlistKey: String? = nil) {
         guard let songId else { return }
+        let addTo = starred ? playlistKey : nil
         player.update(songId: songId) { $0.starred = starred }
         Task {
-            guard let r = await attempt("Couldn't change the like", { try await $0.like(songId, starred: starred) }) else {
+            guard let r = await attempt("Couldn't change the like", { try await $0.like(songId, starred: starred, addTo: addTo) }) else {
                 player.update(songId: songId) { $0.starred = !starred }
                 return
             }
             if r.runId != nil {
                 player.update(songId: songId) { $0.isInbox = false }
-                track(r, "Keeping it")
+                track(r, addTo != nil ? "Keeping it and adding it to the playlist" : "Keeping it")
             } else {
+                if addTo != nil { say("Liked and added to the playlist") }
                 dataVersion += 1
             }
         }
@@ -195,6 +221,20 @@ final class AppModel {
             }
             player.removeSong(songId)
             track(r, title.map { "Removed \($0)" } ?? "Remove")
+        }
+    }
+
+    /// Deletes the file for good; it stops playing and leaves the queue straight away.
+    func deleteFromLibrary(_ songIds: [String], label: String) {
+        Task {
+            var started: [Started] = []
+            for id in songIds {
+                guard let r = await attempt("Couldn't delete it", { try await $0.deleteFromLibrary(id) }) else { continue }
+                player.removeSong(id)
+                started.append(r)
+            }
+            // the jobs run one after another; following the last says when they're all done
+            if let last = started.last { track(last, label) }
         }
     }
 

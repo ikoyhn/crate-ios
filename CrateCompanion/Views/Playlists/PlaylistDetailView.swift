@@ -13,9 +13,11 @@ struct PlaylistDetailView: View {
     @State private var error: String?
     @State private var showAll = false
     @State private var confirmRegenerate = false
-    /// Held here rather than on the row: a sheet owned by a List row is dismissed again when the
-    /// row's swipe actions close or the row is rebuilt, so it would sometimes flash shut.
-    @State private var addingToPlaylist: Track?
+    /// Select mode: tick songs, then act on them all at once.
+    @State private var selecting = false
+    @State private var selected: [String] = []  // song ids, in the order you ticked them
+    @State private var addingSelected = false
+    @State private var confirmDeleteSelected = false
     /// Songs you've removed: hidden straight away, even before Crate's job deletes them.
     @State private var removed: Set<String> = []
 
@@ -23,32 +25,49 @@ struct PlaylistDetailView: View {
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
     private let pageSize = 50
 
-    init(ref: PlaylistRef) {
-        self.ref = ref
-        _tab = State(initialValue: ref.kind == .own ? .suggested : .tracks)  // your own playlists open on suggestions
-    }
+    // Explicit, as the private properties would make the memberwise init private
+    init(ref: PlaylistRef) { self.ref = ref }
 
     var body: some View {
         List {
             header
-            Picker("Show", selection: $tab) {
-                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue) }
-            }
-            .pickerStyle(.segmented)
-            .listRowSeparator(.hidden)
+            if selecting {
+                trackList
+            } else if ref.kind == .liked {
+                trackList  // Crate has no suggestions for Liked Songs
+            } else {
+                Picker("Show", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue) }
+                }
+                .pickerStyle(.segmented)
+                .listRowSeparator(.hidden)
 
-            switch tab {
-            case .tracks: trackList
-            case .suggested: SuggestionsSection(ref: ref, onAdded: { Task { await load() } })
+                switch tab {
+                case .tracks: trackList
+                case .suggested: SuggestionsSection(ref: ref, onAdded: { Task { await load() } })
+                }
             }
         }
         .listStyle(.plain)
-        .navigationTitle(ref.name)
+        .navigationTitle(selecting ? "\(selected.count) selected" : ref.name)
+        .navigationBarBackButtonHidden(selecting)
+        .sheet(isPresented: $addingSelected) {
+            AddToPlaylistSheet(songIds: selected) { endSelecting() }
+        }
+        .confirmationDialog("Delete \(selected.count) songs from your library?", isPresented: $confirmDeleteSelected,
+                            titleVisibility: .visible) {
+            Button("Delete \(selected.count) songs", role: .destructive) {
+                model.deleteFromLibrary(selected, label: "Deleting \(selected.count) songs")
+                tracks.removeAll { selected.contains($0.songId) }
+                endSelecting()
+            }
+        } message: {
+            Text("Their files are deleted for good, they leave your playlists, and Crate won't suggest them again. New songs still in the inbox are just removed.")
+        }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbar }
         .refreshable { await load() }
         .task(id: model.dataVersion) { await load() }
-        .sheet(item: $addingToPlaylist) { t in AddToPlaylistSheet(songId: t.songId, title: t.title) }
         .confirmationDialog("Rebuild \(ref.name)?", isPresented: $confirmRegenerate, titleVisibility: .visible) {
             Button("Rebuild now") { regenerate() }
         } message: {
@@ -79,6 +98,42 @@ struct PlaylistDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
+        if selecting {
+            ToolbarItem(placement: .topBarLeading) {
+                Button(selected.count == tracks.count ? "Deselect all" : "Select all") {
+                    selected = selected.count == tracks.count ? [] : tracks.map(\.songId)
+                }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { addingSelected = true } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
+                    Button { loveSelected() } label: { Label("Love", systemImage: "heart") }
+                    Divider()
+                    Button { playSelected(next: false) } label: { Label("Play", systemImage: "play") }
+                    Button { playSelected(next: true) } label: { Label("Add to queue", systemImage: "text.append") }
+                    Divider()
+                    Button(role: .destructive) { confirmDeleteSelected = true } label: {
+                        Label("Delete from library…", systemImage: "trash")
+                    }
+                } label: {
+                    Label("Actions", systemImage: "ellipsis.circle")
+                }
+                .disabled(selected.isEmpty)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Done") { endSelecting() }.bold()
+            }
+        } else {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("Select") { tab = .tracks; selecting = true }
+                    .disabled(tracks.isEmpty)
+            }
+            toolbarMenu
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var toolbarMenu: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 if regenerateJob != nil || promptId != nil {
@@ -88,6 +143,8 @@ struct PlaylistDetailView: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+            .opacity(ref.kind == .liked ? 0 : 1)  // nothing to rebuild or suggest for Liked Songs
+            .disabled(ref.kind == .liked)
         }
     }
 
@@ -106,20 +163,49 @@ struct PlaylistDetailView: View {
         if !loaded {
             ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
         } else if tracks.isEmpty {
-            Text("No songs in this playlist yet.").foregroundStyle(.secondary)
+            Text(ref.kind == .liked ? "Songs you ♥ show up here." : "No songs in this playlist yet.").foregroundStyle(.secondary)
         }
-        let shown = showAll ? tracks : Array(tracks.prefix(pageSize))
+        let shown = showAll || selecting ? tracks : Array(tracks.prefix(pageSize))
         ForEach(Array(shown.enumerated()), id: \.element.id) { i, t in
-            TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
-                     onPlay: { play(from: i) },
-                     onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
-                     onTakeOut: { takeOut(t) },
-                     onRemove: { remove(t) },
-                     onAddToPlaylist: { addToPlaylist(t) })
+            if selecting {
+                SelectableTrackRow(track: t, isSelected: selected.contains(t.songId)) { toggle(t.songId) }
+            } else {
+                TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
+                         onPlay: { play(from: i) },
+                         onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
+                         onTakeOut: { takeOut(t) },
+                         onRemove: { remove(t) })
+            }
         }
-        if !showAll && tracks.count > pageSize {
+        if !showAll && !selecting && tracks.count > pageSize {
             Button("Show all \(tracks.count) songs") { showAll = true }
         }
+    }
+
+    // MARK: - selection
+
+    private func toggle(_ songId: String) {
+        if let i = selected.firstIndex(of: songId) { selected.remove(at: i) } else { selected.append(songId) }
+    }
+
+    private func endSelecting() {
+        selecting = false
+        selected = []
+    }
+
+    private func loveSelected() {
+        for id in selected { model.setStar(id, true) }
+        for i in tracks.indices where selected.contains(tracks[i].songId) { tracks[i].starred = true }
+        model.say("Loved \(selected.count) songs")
+        endSelecting()
+    }
+
+    /// Play the selection now, or add it to the end of the queue.
+    private func playSelected(next: Bool) {
+        let chosen = selected.compactMap { id in tracks.first { $0.songId == id } }
+            .compactMap { model.resolver?.item($0, playlistKey: ref.key) }
+        if next { for item in chosen { player.addToQueue(item) } } else { player.play(chosen) }
+        endSelecting()
     }
 
     private func items() -> [PlayableItem] {
@@ -152,18 +238,15 @@ struct PlaylistDetailView: View {
         }
     }
 
-    private func addToPlaylist(_ t: Track) {
-        // let the swipe actions finish closing first, or the sheet can be dismissed with them
-        Task {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            addingToPlaylist = t
-        }
-    }
-
     private func load() async {
         guard let api = model.crate else { return }
         do {
-            tracks = try await api.tracks(forKey: ref.key).filter { !removed.contains($0.songId) }
+            if ref.kind == .liked {
+                guard let nd = model.navidrome else { return }
+                tracks = try await nd.starredSongs()
+            } else {
+                tracks = try await api.tracks(forKey: ref.key).filter { !removed.contains($0.songId) }
+            }
             error = nil
         } catch {
             self.error = error.localizedDescription
@@ -176,14 +259,16 @@ struct PlaylistDetailView: View {
 struct TrackRow: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(\.pickPlaylist) private var pickPlaylist
     let track: Track
     let playlistKey: String?
     var isCurrent = false
     let onPlay: () -> Void
     let onChange: (Track) -> Void
     var onTakeOut: (() -> Void)?
-    let onRemove: () -> Void
-    let onAddToPlaylist: () -> Void
+    /// Not for me on a new song. A list can pass its own to hide the row straight away.
+    var onRemove: (() -> Void)?
+    @State private var confirmDelete = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -212,7 +297,7 @@ struct TrackRow: View {
                     .font(.caption2).foregroundStyle(.yellow)
             }
             if track.state == .new {
-                Button(action: onRemove) {
+                Button(action: remove) {
                     Image(systemName: "hand.thumbsdown").foregroundStyle(.secondary)
                 }
                 .buttonStyle(.borderless)
@@ -226,16 +311,21 @@ struct TrackRow: View {
             } else {
                 Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: "heart") }.tint(.pink)
             }
-            Button(action: onAddToPlaylist) { Label("Add to playlist", systemImage: "text.badge.plus") }.tint(.blue)
+            Button(action: addToPlaylist) { Label("Add to playlist", systemImage: "text.badge.plus") }.tint(.blue)
         }
         .swipeActions(edge: .trailing) {
             if track.state == .new {
-                Button(role: .destructive, action: onRemove) { Label("Not for me", systemImage: "hand.thumbsdown") }
+                Button(role: .destructive, action: remove) { Label("Not for me", systemImage: "hand.thumbsdown") }
             } else if track.addedByYou, let onTakeOut {
                 Button(role: .destructive, action: onTakeOut) { Label("Take out", systemImage: "minus.circle") }
             }
         }
         .contextMenu { menu }
+        .confirmationDialog("Delete \(track.title) from your library?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) { model.deleteFromLibrary([track.songId], label: "Deleting \(track.title)") }
+        } message: {
+            Text("The file is deleted for good, the song leaves your playlists, and Crate won't suggest it again.")
+        }
     }
 
     @ViewBuilder
@@ -244,7 +334,7 @@ struct TrackRow: View {
             Button { player.playNext(item) } label: { Label("Play next", systemImage: "text.insert") }
             Button { player.addToQueue(item) } label: { Label("Add to queue", systemImage: "text.append") }
         }
-        Button(action: onAddToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
+        Button(action: addToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
         Divider()
         Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: track.starred ? "heart.slash" : "heart") }
         Menu {
@@ -257,11 +347,23 @@ struct TrackRow: View {
         if track.state == .new {
             Divider()
             Button { keep() } label: { Label("Keep in my library", systemImage: "checkmark.circle") }
-            Button(role: .destructive, action: onRemove) { Label("Not for me", systemImage: "hand.thumbsdown") }
+            Button(role: .destructive, action: remove) { Label("Not for me", systemImage: "hand.thumbsdown") }
         }
         if track.addedByYou, let onTakeOut {
             Button(role: .destructive, action: onTakeOut) { Label("Take out of playlist", systemImage: "minus.circle") }
         }
+        if track.state != .new {
+            Divider()
+            Button(role: .destructive) { confirmDelete = true } label: { Label("Delete from library…", systemImage: "trash") }
+        }
+    }
+
+    private func addToPlaylist() {
+        pickPlaylist(PlaylistPick(song: .library(track.songId), title: track.title))
+    }
+
+    private func remove() {
+        if let onRemove { onRemove() } else { model.remove(track.songId, title: track.title) }
     }
 
     private func toggleStar() {
@@ -287,5 +389,31 @@ struct TrackRow: View {
         t.starred = true
         onChange(t)
         model.keep(track.songId)
+    }
+}
+
+/// A song in select mode: tap anywhere on the row to tick it.
+struct SelectableTrackRow: View {
+    @Environment(AppModel.self) private var model
+    let track: Track
+    let isSelected: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                .font(.title3)
+                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+            Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(track.title).lineLimit(1)
+                Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: toggle)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 }

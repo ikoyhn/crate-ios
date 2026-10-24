@@ -6,6 +6,7 @@ import SwiftUI
 struct SuggestionsSection: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(\.pickPlaylist) private var pickPlaylist
     let ref: PlaylistRef
     let onAdded: () -> Void
 
@@ -47,7 +48,8 @@ struct SuggestionsSection: View {
                  ? "Navidrome won't let Crate change this playlist, so you can listen to suggestions but not add them."
                  : ref.kind == .own
                  ? "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist."
-                 : "New songs only: songs you already have are suggested for your own playlists. 👎: never suggested again, and similar songs rank lower.")
+                 : "New songs only: songs you already have are suggested for your own playlists. + saves a song to your library. "
+                   + "Swipe right to save it into one of your playlists. 👎: never suggested again, and similar songs rank lower.")
         }
         .task(id: ref.key) { await poll() }
     }
@@ -55,18 +57,14 @@ struct SuggestionsSection: View {
     @ViewBuilder
     private func row(_ s: Suggestion) -> some View {
         let item = model.resolver?.item(s, playlistKey: ref.key)
+        let isCurrent = item != nil && player.current?.id == item?.id
         HStack(spacing: 12) {
-            Button {
-                if let item { player.play(item) }
-            } label: {
-                ZStack {
-                    Artwork(url: cover(s), size: 48)
-                    Image(systemName: player.current?.id == item?.id && player.isPlaying ? "speaker.wave.2.fill" : "play.fill")
-                        .font(.caption.bold()).foregroundStyle(.white)
-                        .padding(6).background(.black.opacity(0.45), in: Circle())
-                }
+            ZStack {
+                Artwork(url: cover(s), size: 48)
+                Image(systemName: isCurrent && player.isPlaying ? "speaker.wave.2.fill" : "play.fill")
+                    .font(.caption.bold()).foregroundStyle(.white)
+                    .padding(6).background(.black.opacity(0.45), in: Circle())
             }
-            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(s.title).lineLimit(1)
@@ -87,12 +85,22 @@ struct SuggestionsSection: View {
 
             if !ref.readonly { addButton(s) }
         }
+        // Tap anywhere on the row to play (or pause) it; the 👎 and + buttons keep their own taps
+        .contentShape(Rectangle())
+        .onTapGesture { playOrPause(item, isCurrent: isCurrent) }
+        .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play") { playOrPause(item, isCurrent: isCurrent) }
         .swipeActions(edge: .trailing) {
             Button(role: .destructive) { dislike(s) } label: { Label("Not for me", systemImage: "hand.thumbsdown") }
         }
         .swipeActions(edge: .leading) {
             if !ref.readonly && adding[s.id] == nil {
-                Button { add(s) } label: { Label("Add", systemImage: "plus") }.tint(.accentColor)
+                if ref.kind == .own {
+                    Button { add(s) } label: { Label("Add", systemImage: "plus") }.tint(.accentColor)
+                } else {
+                    // Crate rebuilds its playlists: send it to one of yours, or pin it here
+                    Button { send(s) } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
+                    Button { add(s) } label: { Label("Add here", systemImage: "pin") }.tint(.accentColor)
+                }
             }
         }
         .contextMenu {
@@ -112,9 +120,17 @@ struct SuggestionsSection: View {
         case .added:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case nil:
-            Button { add(s) } label: { Image(systemName: "plus.circle").font(.title3) }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Add to playlist")
+            if ref.kind == .own {
+                // your own playlist: adding saves it and puts it here
+                Button { add(s) } label: { Image(systemName: "plus.circle").font(.title3) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Add to playlist")
+            } else {
+                // Crate rebuilds its playlists, so + just saves it (swipe right for a playlist)
+                Button { save(s) } label: { Image(systemName: "plus.circle").font(.title3) }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(s.kind == .library ? "Like it" : "Save to my library")
+            }
         }
     }
 
@@ -124,6 +140,11 @@ struct SuggestionsSection: View {
     }
 
     // MARK: - actions
+
+    private func playOrPause(_ item: PlayableItem?, isCurrent: Bool) {
+        guard let item else { return }
+        if isCurrent { player.toggle() } else { player.play(item) }
+    }
 
     private func add(_ s: Suggestion) {
         adding[s.id] = .adding
@@ -141,6 +162,35 @@ struct SuggestionsSection: View {
                 adding[s.id] = .downloading
                 model.track(started, "Adding \(s.title)")
             }
+        }
+    }
+
+    /// Into one of your playlists, via "Add to playlist…".
+    private func send(_ s: Suggestion) {
+        let sent = { adding[s.id] = s.kind == .library ? .added : .downloading }
+        if s.kind == .library, let id = s.songId {
+            pickPlaylist(PlaylistPick(song: .library(id), title: s.title, onSent: sent))
+        } else if let deezerId = s.deezerId {
+            pickPlaylist(PlaylistPick(song: .new(deezerId: deezerId), title: s.title, onSent: sent))
+        }
+    }
+
+    /// Into your library without a playlist: a library song is liked, a new song downloaded.
+    private func save(_ s: Suggestion) {
+        if s.kind == .library {
+            adding[s.id] = .added
+            model.setStar(s.songId, true)
+            return
+        }
+        guard let deezerId = s.deezerId else { return }
+        adding[s.id] = .adding
+        Task {
+            guard let started = await model.attempt("Couldn't save it", { try await $0.want(track: deezerId) }) else {
+                adding[s.id] = nil
+                return
+            }
+            adding[s.id] = .downloading
+            model.track(started, "Saving \(s.title)")
         }
     }
 
