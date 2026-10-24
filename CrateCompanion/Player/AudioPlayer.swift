@@ -25,7 +25,10 @@ final class AudioPlayer {
     /// A song that couldn't be played, as a message to show.
     @ObservationIgnored var onError: ((String) -> Void)?
 
-    @ObservationIgnored private let player = AVPlayer()
+    @ObservationIgnored private let player: AVPlayer
+    /// Ties the lock screen / Control Centre player to our AVPlayer, so iOS knows Crate is the app
+    /// behind it (and opens Crate when you tap it). Its info and command centres replace the shared ones.
+    @ObservationIgnored private let nowPlaying: MPNowPlayingSession
     @ObservationIgnored private var timeObserver: Any?
     @ObservationIgnored private var endObserver: NSObjectProtocol?
     @ObservationIgnored private var interruptionObserver: NSObjectProtocol?
@@ -39,10 +42,11 @@ final class AudioPlayer {
     @ObservationIgnored private var sessionActive = false
 
     init() {
+        let avPlayer = AVPlayer()
+        player = avPlayer
+        nowPlaying = MPNowPlayingSession(players: [avPlayer])
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
         player.automaticallyWaitsToMinimizeStalling = true
-        // Makes Crate the lock screen's now-playing app, so tapping the player there opens it
-        UIApplication.shared.beginReceivingRemoteControlEvents()
         observePlayer()
         setupRemoteCommands()
     }
@@ -81,7 +85,7 @@ final class AudioPlayer {
         player.replaceCurrentItem(with: nil)
         queue = PlayQueue()
         elapsed = 0; duration = 0
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+        nowPlaying.nowPlayingInfoCenter.nowPlayingInfo = nil
     }
 
     func next() {
@@ -111,7 +115,7 @@ final class AudioPlayer {
     /// Reflect a like / keep on the queue (and the lock screen's heart).
     func update(songId: String, _ change: (inout PlayableItem) -> Void) {
         queue.update(songId: songId, change)
-        MPRemoteCommandCenter.shared().likeCommand.isActive = current?.starred ?? false
+        nowPlaying.remoteCommandCenter.likeCommand.isActive = current?.starred ?? false
     }
 
     /// A removed inbox track is deleted from the server: skip it if it's playing, drop it otherwise.
@@ -166,6 +170,7 @@ final class AudioPlayer {
     }
 
     private func activateSession() {
+        nowPlaying.becomeActiveIfPossible()  // back in front of the lock screen if another app took it
         guard !sessionActive else { return }
         // Activated on first play rather than at launch, so opening the app doesn't stop other audio
         sessionActive = (try? AVAudioSession.sharedInstance().setActive(true)) != nil
@@ -236,7 +241,7 @@ final class AudioPlayer {
     // MARK: - lock screen
 
     private func setupRemoteCommands() {
-        let cc = MPRemoteCommandCenter.shared()
+        let cc = nowPlaying.remoteCommandCenter
         // Remote commands arrive on the main thread
         func on(_ command: MPRemoteCommand, _ action: @escaping @MainActor (AudioPlayer, MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus) {
             command.addTarget { [weak self] event in
@@ -267,7 +272,7 @@ final class AudioPlayer {
 
     private func updateNowPlaying() {
         guard let item = current else {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            nowPlaying.nowPlayingInfoCenter.nowPlayingInfo = nil
             return
         }
         var info: [String: Any] = [
@@ -280,8 +285,8 @@ final class AudioPlayer {
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
         ]
         if let art = artwork, art.0 == item.artworkURL { info[MPMediaItemPropertyArtwork] = art.1 }
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
-        let cc = MPRemoteCommandCenter.shared()
+        nowPlaying.nowPlayingInfoCenter.nowPlayingInfo = info
+        let cc = nowPlaying.remoteCommandCenter
         cc.likeCommand.isEnabled = item.songId != nil
         cc.likeCommand.isActive = item.starred
     }
