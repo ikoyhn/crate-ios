@@ -54,5 +54,7 @@
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Crate connects to your Crate and Navidrome servers on your local network.</string>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
 </dict>
 </plist>

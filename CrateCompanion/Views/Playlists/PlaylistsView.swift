@@ -12,11 +12,13 @@ struct PlaylistRef: Hashable {
 
 struct PlaylistsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(DownloadStore.self) private var downloads
     @State private var playlists: [Playlist] = []
     @State private var own: [OwnPlaylist] = []
     @State private var ownError: String?
     @State private var liked: [Track]?
     @State private var loaded = false
+    @State private var unreachable = false
 
     var body: some View {
         NavigationStack {
@@ -31,8 +33,21 @@ struct PlaylistsView: View {
                             .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
-                if model.navidrome != nil {
-                    Section {
+                Section {
+                    NavigationLink { DownloadsView() } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "arrow.down.circle.fill")
+                                .font(.title2).foregroundStyle(.white)
+                                .frame(width: 52, height: 52)
+                                .background(Theme.amber.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Downloads").font(.body.weight(.semibold))
+                                Text(downloadsSubtitle).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    if model.navidrome != nil {
                         NavigationLink(value: PlaylistRef(key: PlaylistKind.likedKey, name: "Liked Songs", readonly: true)) {
                             PlaylistRow(name: "Liked Songs", subtitle: liked.map { "\($0.count) songs" } ?? "Songs you've loved",
                                         kind: .liked,
@@ -42,7 +57,8 @@ struct PlaylistsView: View {
                 }
                 Section("Made for you") {
                     if loaded && playlists.isEmpty {
-                        Text("No playlists yet. Run Daily Mixes or Discover Weekly from the Create tab.")
+                        Text(unreachable ? "Can't reach Crate right now. Music you've downloaded is in Downloads."
+                                         : "No playlists yet. Run Daily Mixes or Discover Weekly from the Create tab.")
                             .foregroundStyle(.secondary)
                     }
                     ForEach(sorted) { p in
@@ -62,6 +78,7 @@ struct PlaylistsView: View {
                     }
                 }
             }
+            .crateScreen()
             .navigationTitle("Playlists")
             .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .refreshable { await load() }
@@ -71,6 +88,13 @@ struct PlaylistsView: View {
     }
 
     private var sorted: [Playlist] { playlists.madeForYouOrder() }
+
+    private var downloadsSubtitle: String {
+        let n = downloads.songs.count
+        let busy = downloads.progress.count
+        if busy > 0 { return "Downloading \(busy) song\(busy == 1 ? "" : "s")…" }
+        return n == 0 ? "Songs and playlists saved for offline listening" : "\(n) song\(n == 1 ? "" : "s") on this phone"
+    }
 
     private func subtitle(_ p: Playlist) -> String {
         var parts = ["\(p.tracks.count) songs"]
@@ -86,8 +110,20 @@ struct PlaylistsView: View {
         async let mine = api.ownPlaylists()
         let nd = model.navidrome
         async let loved = nd?.starredSongs()
-        if let p = try? await pls { playlists = p }
+        do {
+            playlists = try await pls
+            unreachable = false
+        } catch {
+            unreachable = true
+        }
         if let l = try? await loved { liked = l }
+        // downloaded playlists follow their playlist: a rebuilt Discover Weekly, a new Liked song...
+        for p in playlists where downloads.isSaved(playlist: p.key) {
+            downloads.sync(playlist: p.key, name: p.name, comment: p.comment, tracks: p.tracks)
+        }
+        if let liked, downloads.isSaved(playlist: PlaylistKind.likedKey) {
+            downloads.sync(playlist: PlaylistKind.likedKey, name: "Liked Songs", comment: nil, tracks: liked)
+        }
         do { own = try await mine; ownError = nil } catch { ownError = error.localizedDescription }
         loaded = true
     }
@@ -115,8 +151,8 @@ struct PlaylistRow: View {
                     .offset(x: 4, y: 4)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.body).lineLimit(1)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(name).font(.body.weight(.semibold)).lineLimit(1)
+                Text(subtitle).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
             }
         }
         .padding(.vertical, 2)

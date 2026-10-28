@@ -102,6 +102,7 @@ struct AddToPlaylistSheet: View {
                     }
                 }
             }
+            .crateScreen()
             .navigationTitle("Add “\(title)”")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

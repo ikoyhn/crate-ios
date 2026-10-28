@@ -24,6 +24,9 @@ final class AudioPlayer {
     @ObservationIgnored var onLike: ((PlayableItem, Bool) -> Void)?
     /// A song that couldn't be played, as a message to show.
     @ObservationIgnored var onError: ((String) -> Void)?
+    /// A downloaded song's file and cover, so it plays without a connection.
+    @ObservationIgnored var localFile: ((String) -> URL?)?
+    @ObservationIgnored var localCover: ((String) -> URL?)?
 
     @ObservationIgnored private let player: AVPlayer
     /// Ties the lock screen / Control Centre player to our AVPlayer, so iOS knows Crate is the app
@@ -144,7 +147,7 @@ final class AudioPlayer {
                 start(url, title: item.title, autoplay: autoplay)
             }
         } else {
-            start(item.streamURL, title: item.title, autoplay: autoplay)
+            start(item.songId.flatMap { localFile?($0) } ?? item.streamURL, title: item.title, autoplay: autoplay)
         }
         updateNowPlaying()
         loadArtwork(for: item)
@@ -293,8 +296,9 @@ final class AudioPlayer {
 
     private func loadArtwork(for item: PlayableItem) {
         guard let url = item.artworkURL, artwork?.0 != url else { return }
+        let source = item.songId.flatMap { localCover?($0) } ?? url  // a download's cover works offline
         Task {
-            guard let data = try? await URLSession.shared.data(from: url).0, let image = UIImage(data: data) else { return }
+            guard let data = try? await URLSession.shared.data(from: source).0, let image = UIImage(data: data) else { return }
             let art = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
             self.artwork = (url, art)
             if self.current?.artworkURL == url { self.updateNowPlaying() }

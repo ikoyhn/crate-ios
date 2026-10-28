@@ -71,6 +71,7 @@ struct SearchView: View {
                                            description: Text("Songs you add are downloaded straight into your library."))
                 }
             }
+            .crateScreen()
             .navigationTitle("Search")
             .navigationDestination(for: CatalogAlbum.self) { AlbumView(album: $0, wants: wants, onAdd: add) }
             .navigationDestination(for: NavidromeArtist.self) { ArtistView(artist: $0) }
@@ -251,7 +252,7 @@ struct AlbumView: View {
         List {
             VStack(spacing: 8) {
                 Artwork(url: URL(string: album.cover), size: 200, corner: 10)
-                Text(album.title).font(.title3.bold()).multilineTextAlignment(.center)
+                Text(album.title).font(Theme.display(24)).tracking(-0.5).multilineTextAlignment(.center)
                 Text([album.artist, detail?.year ?? ""].filter { !$0.isEmpty }.joined(separator: " · "))
                     .foregroundStyle(.secondary)
                 if let d = detail {
@@ -263,21 +264,25 @@ struct AlbumView: View {
                               systemImage: "plus.circle.fill")
                     }
                     .buttonStyle(.borderedProminent)
+                    .buttonBorderShape(.capsule)
                     .disabled(missing == 0 || addingAll)
                 }
             }
             .frame(maxWidth: .infinity)
+            .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
             if let d = detail {
                 ForEach(d.tracks) { t in
                     CatalogTrackRow(track: t, want: wants.first { $0.deezerId == t.deezerId }, onAdd: onAdd)
+                        .listRowBackground(Color.clear)
                 }
             } else {
                 ProgressView().frame(maxWidth: .infinity)
             }
         }
         .listStyle(.plain)
+        .crateScreen()
         .navigationBarTitleDisplayMode(.inline)
         .task { detail = await model.attempt("Couldn't load the album") { try await $0.album(album.deezerId) } }
     }

@@ -26,6 +26,11 @@ for Navidrome. Everything you'd do in Crate's web UI, from your phone, plus a pr
 * **Search** Deezer's catalogue, preview, and add songs or whole albums to your library.
 * **Activity:** runs and logs, inbox decisions, connection health, discovery history with
   **Clear discovery history**.
+* **Downloads:** save any song (long-press) or a whole playlist (⋯ menu) to the phone and play it
+  with no connection. Downloaded playlists follow the playlist: when Discover Weekly is rebuilt or
+  you ♥ a new song, opening Playlists online downloads the new songs and clears out the old ones.
+  Everything saved is under **Playlists › Downloads**. Downloads use the streaming quality you
+  chose; formats iOS can't play from a file are saved as 320 kbps MP3.
 * **Player:** streams from Navidrome at full quality (or a chosen bitrate) and scrobbles, so plays
   count as usual. Background audio, lock-screen and Control Centre controls with a ♥ button,
   queue, shuffle and repeat. Or skip Navidrome and stream through Crate.

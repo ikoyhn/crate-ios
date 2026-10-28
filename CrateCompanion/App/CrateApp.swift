@@ -4,12 +4,16 @@ import SwiftUI
 struct CrateApp: App {
     @State private var model = AppModel()
 
+    init() { Theme.applyBarAppearance() }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
                 .environment(model.player)
-                .tint(.accentColor)
+                .environment(model.downloads)
+                .tint(Theme.amber)
+                .preferredColorScheme(.dark)  // Crate is designed dark-only
         }
     }
 }

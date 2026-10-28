@@ -4,10 +4,14 @@ import SwiftUI
 struct PlaylistDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(DownloadStore.self) private var downloads
     let ref: PlaylistRef
 
     enum Tab: String, CaseIterable { case tracks = "Songs", suggested = "Suggested" }
     @State private var tab: Tab = .tracks
+    /// Which songs the list shows: all, or just the new / kept / added-by-you ones.
+    enum Filter { case all, new, kept, added }
+    @State private var filter: Filter = .all
     @State private var tracks: [Track] = []
     @State private var loaded = false
     @State private var error: String?
@@ -20,6 +24,8 @@ struct PlaylistDetailView: View {
     @State private var confirmDeleteSelected = false
     /// Songs you've removed: hidden straight away, even before Crate's job deletes them.
     @State private var removed: Set<String> = []
+    /// Couldn't reach the server: showing the copy saved on the phone.
+    @State private var offline = false
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -33,15 +39,8 @@ struct PlaylistDetailView: View {
             header
             if selecting {
                 trackList
-            } else if ref.kind == .liked {
-                trackList  // Crate has no suggestions for Liked Songs
             } else {
-                Picker("Show", selection: $tab) {
-                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue) }
-                }
-                .pickerStyle(.segmented)
-                .listRowSeparator(.hidden)
-
+                chips
                 switch tab {
                 case .tracks: trackList
                 case .suggested: SuggestionsSection(ref: ref, onAdded: { Task { await load() } })
@@ -49,7 +48,8 @@ struct PlaylistDetailView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle(selecting ? "\(selected.count) selected" : ref.name)
+        .crateScreen()
+        .navigationTitle(selecting ? "\(selected.count) selected" : "")
         .navigationBarBackButtonHidden(selecting)
         .sheet(isPresented: $addingSelected) {
             AddToPlaylistSheet(songIds: selected) { endSelecting() }
@@ -80,20 +80,149 @@ struct PlaylistDetailView: View {
     // MARK: - header
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let comment = ref.comment, !comment.isEmpty {
-                Text(comment).font(.subheadline).foregroundStyle(.secondary)
+        VStack(spacing: 14) {
+            cover
+                .shadow(color: Theme.amber.opacity(0.2), radius: 26, y: 12)
+                .padding(.top, 4)
+            VStack(spacing: 6) {
+                Text(ref.name).font(Theme.display(28)).tracking(-0.6)
+                    .multilineTextAlignment(.center).lineLimit(2)
+                if let comment = ref.comment, !comment.isEmpty {
+                    Text(comment).font(.subheadline).foregroundStyle(Theme.textMedium)
+                        .multilineTextAlignment(.center).lineLimit(3)
+                }
             }
-            HStack(spacing: 12) {
-                Button { playAll(shuffle: false) } label: { Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity) }
-                    .buttonStyle(.borderedProminent)
-                Button { playAll(shuffle: true) } label: { Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity) }
-                    .buttonStyle(.bordered)
+            stats
+            if downloads.isSaved(playlist: ref.key) { downloadStatus }
+            if offline {
+                Label("Offline: showing the songs downloaded to this phone", systemImage: "wifi.slash")
+                    .font(.caption).foregroundStyle(Theme.textMedium)
+            } else if let error {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
+            actions
+        }
+        .frame(maxWidth: .infinity)
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder
+    private var cover: some View {
+        if ref.kind == .own, ref.key.hasPrefix("nd:") {
+            PlaylistCover(playlistId: String(ref.key.dropFirst(3)), size: 210)
+        } else {
+            Artwork(url: tracks.first.flatMap { downloads.localCover($0.songId) ?? model.resolver?.artwork(songId: $0.songId, size: 600) },
+                    size: 210, corner: 8)
+        }
+    }
+
+    /// "30 songs, 1 hr 54 min" and how many are new or kept.
+    private var stats: some View {
+        let seconds = tracks.reduce(0) { $0 + $1.duration }
+        let length = Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes], width: .abbreviated))
+        let new = tracks.filter { $0.state == .new }.count
+        let kept = tracks.filter { $0.state == .kept }.count
+        return HStack(spacing: 8) {
+            Text("\(tracks.count) songs" + (seconds > 0 ? ", \(length)" : ""))
+                .font(.footnote.weight(.semibold))
+            if new + kept > 0 {
+                HStack(spacing: 6) {
+                    if kept > 0 { Text("\(kept) KEPT") }
+                    if kept > 0 && new > 0 { Text("·") }
+                    if new > 0 { Text("\(new) NEW") }
+                }
+                .font(Theme.caps).tracking(0.6).foregroundStyle(Theme.amber)
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(Theme.amber.opacity(0.14), in: Capsule())
+            }
+        }
+    }
+
+    /// Download, the ⋯ menu, shuffle, and the big play button.
+    private var actions: some View {
+        HStack(spacing: 22) {
+            Button {
+                if downloads.isSaved(playlist: ref.key) { downloads.removePlaylist(ref.key) } else { downloadPlaylist() }
+            } label: {
+                Image(systemName: downloads.isSaved(playlist: ref.key) ? "arrow.down.circle.fill" : "arrow.down.circle")
+                    .font(.title2)
+                    .foregroundStyle(downloads.isSaved(playlist: ref.key) ? Theme.amber : Theme.textMedium)
+            }
+            .accessibilityLabel(downloads.isSaved(playlist: ref.key) ? "Remove download" : "Download")
+            .disabled(tracks.isEmpty)
+            Menu { menuItems } label: {
+                Image(systemName: "ellipsis").font(.title2).foregroundStyle(Theme.textMedium)
+                    .frame(width: 32, height: 32)
+            }
+            .accessibilityLabel("More")
+            Spacer()
+            Button { playAll(shuffle: true) } label: {
+                Image(systemName: "shuffle").font(.title2).foregroundStyle(Theme.amber)
+            }
+            .accessibilityLabel("Shuffle")
+            .disabled(tracks.isEmpty)
+            PlayCircle(isPlaying: isPlayingHere && player.isPlaying, size: 58) {
+                if isPlayingHere { player.toggle() } else { playAll(shuffle: false) }
             }
             .disabled(tracks.isEmpty)
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
         }
+        .buttonStyle(.borderless)
+        .padding(.top, 2)
+    }
+
+    /// Something from this playlist is what's playing.
+    private var isPlayingHere: Bool {
+        guard let cur = player.current, cur.playlistKey == ref.key, !cur.isSuggestion else { return false }
+        return true
+    }
+
+    /// All · New · Kept · Added by you · Suggested
+    private var chips: some View {
+        let new = tracks.filter { $0.state == .new }.count
+        let kept = tracks.filter { $0.state == .kept }.count
+        let added = tracks.filter(\.addedByYou).count
+        return ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Chip(title: "All (\(tracks.count))", selected: tab == .tracks && filter == .all) { show(.tracks, .all) }
+                if new > 0 {
+                    Chip(title: "New (\(new))", selected: tab == .tracks && filter == .new, dot: Theme.amber) { show(.tracks, .new) }
+                }
+                if kept > 0 {
+                    Chip(title: "Kept (\(kept))", systemImage: "checkmark", selected: tab == .tracks && filter == .kept) { show(.tracks, .kept) }
+                }
+                if added > 0 {
+                    Chip(title: "Added by you", selected: tab == .tracks && filter == .added) { show(.tracks, .added) }
+                }
+                if ref.kind != .liked {  // Crate has no suggestions for Liked Songs
+                    Chip(title: "Suggested", systemImage: "sparkles", selected: tab == .suggested) { show(.suggested, .all) }
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 8, trailing: 0))
+        .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
+    }
+
+    private func show(_ t: Tab, _ f: Filter) {
+        withAnimation(.easeOut(duration: 0.2)) { tab = t; filter = f }
+    }
+
+    private var filtered: [Track] {
+        switch filter {
+        case .all: tracks
+        case .new: tracks.filter { $0.state == .new }
+        case .kept: tracks.filter { $0.state == .kept }
+        case .added: tracks.filter(\.addedByYou)
+        }
+    }
+
+    private var downloadStatus: some View {
+        let (have, total) = downloads.counts(playlist: ref.key)
+        return Label(have >= total ? "Downloaded" : "Downloading \(have) of \(total)",
+                     systemImage: have >= total ? "arrow.down.circle.fill" : "arrow.down.circle")
+            .font(.caption).foregroundStyle(have >= total ? Color.accentColor : .secondary)
     }
 
     @ToolbarContentBuilder
@@ -108,6 +237,7 @@ struct PlaylistDetailView: View {
                 Menu {
                     Button { addingSelected = true } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
                     Button { loveSelected() } label: { Label("Love", systemImage: "heart") }
+                    Button { downloadSelected() } label: { Label("Download", systemImage: "arrow.down.circle") }
                     Divider()
                     Button { playSelected(next: false) } label: { Label("Play", systemImage: "play") }
                     Button { playSelected(next: true) } label: { Label("Add to queue", systemImage: "text.append") }
@@ -125,26 +255,30 @@ struct PlaylistDetailView: View {
             }
         } else {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("Select") { tab = .tracks; selecting = true }
+                Button("Select") { show(.tracks, .all); selecting = true }
                     .disabled(tracks.isEmpty)
             }
-            toolbarMenu
         }
     }
 
-    @ToolbarContentBuilder
-    private var toolbarMenu: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                if regenerateJob != nil || promptId != nil {
-                    Button { confirmRegenerate = true } label: { Label("Rebuild now", systemImage: "arrow.triangle.2.circlepath") }
-                }
-                Button { tab = .suggested } label: { Label("Suggested songs", systemImage: "sparkles") }
-            } label: {
-                Image(systemName: "ellipsis.circle")
+    /// The ⋯ menu in the header.
+    @ViewBuilder
+    private var menuItems: some View {
+        if downloads.isSaved(playlist: ref.key) {
+            Button(role: .destructive) { downloads.removePlaylist(ref.key) } label: {
+                Label("Remove download", systemImage: "xmark.circle")
             }
-            .opacity(ref.kind == .liked ? 0 : 1)  // nothing to rebuild or suggest for Liked Songs
-            .disabled(ref.kind == .liked)
+        } else {
+            Button { downloadPlaylist() } label: { Label("Download", systemImage: "arrow.down.circle") }
+                .disabled(tracks.isEmpty)
+        }
+        Button { show(.tracks, .all); selecting = true } label: { Label("Select songs", systemImage: "checkmark.circle") }
+            .disabled(tracks.isEmpty)
+        if ref.kind != .liked {  // nothing to rebuild or suggest for Liked Songs
+            if regenerateJob != nil || promptId != nil {
+                Button { confirmRegenerate = true } label: { Label("Rebuild now", systemImage: "arrow.triangle.2.circlepath") }
+            }
+            Button { show(.suggested, .all) } label: { Label("Suggested songs", systemImage: "sparkles") }
         }
     }
 
@@ -163,22 +297,34 @@ struct PlaylistDetailView: View {
         if !loaded {
             ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden)
         } else if tracks.isEmpty {
-            Text(ref.kind == .liked ? "Songs you ♥ show up here." : "No songs in this playlist yet.").foregroundStyle(.secondary)
+            Text(ref.kind == .liked ? "Songs you ♥ show up here." : "No songs in this playlist yet.")
+                .foregroundStyle(Theme.textMedium)
+                .listRowBackground(Color.clear)
         }
-        let shown = showAll || selecting ? tracks : Array(tracks.prefix(pageSize))
+        let list = selecting ? tracks : filtered
+        let shown = showAll || selecting ? list : Array(list.prefix(pageSize))
         ForEach(Array(shown.enumerated()), id: \.element.id) { i, t in
-            if selecting {
-                SelectableTrackRow(track: t, isSelected: selected.contains(t.songId)) { toggle(t.songId) }
-            } else {
-                TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
-                         onPlay: { play(from: i) },
-                         onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
-                         onTakeOut: { takeOut(t) },
-                         onRemove: { remove(t) })
+            Group {
+                if selecting {
+                    SelectableTrackRow(track: t, isSelected: selected.contains(t.songId)) { toggle(t.songId) }
+                } else {
+                    TrackRow(track: t, playlistKey: ref.key, isCurrent: player.current?.songId == t.songId,
+                             onPlay: { play(list, from: i) },
+                             onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } },
+                             onTakeOut: { takeOut(t) },
+                             onRemove: { remove(t) },
+                             onKeep: { keep(t) })
+                }
             }
+            .listRowInsets(EdgeInsets(top: 9, leading: 22, bottom: 9, trailing: 22))
+            .listRowBackground(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.surface1)
+                .padding(.horizontal, 12).padding(.vertical, 3))
+            .listRowSeparator(.hidden)
         }
-        if !showAll && !selecting && tracks.count > pageSize {
-            Button("Show all \(tracks.count) songs") { showAll = true }
+        if !showAll && !selecting && list.count > pageSize {
+            Button("Show all \(list.count) songs") { showAll = true }
+                .foregroundStyle(Theme.amber)
+                .listRowBackground(Color.clear)
         }
     }
 
@@ -200,6 +346,18 @@ struct PlaylistDetailView: View {
         endSelecting()
     }
 
+    private func downloadSelected() {
+        downloads.download(selected.compactMap { id in tracks.first { $0.songId == id } })
+        model.say("Downloading \(selected.count) songs")
+        endSelecting()
+    }
+
+    /// Saved on the phone, and kept in step with the playlist whenever it's opened online.
+    private func downloadPlaylist() {
+        downloads.save(playlist: ref.key, name: ref.name, comment: ref.comment, tracks: tracks)
+        model.say("Downloading \(ref.name)")
+    }
+
     /// Play the selection now, or add it to the end of the queue.
     private func playSelected(next: Bool) {
         let chosen = selected.compactMap { id in tracks.first { $0.songId == id } }
@@ -212,8 +370,13 @@ struct PlaylistDetailView: View {
         tracks.compactMap { model.resolver?.item($0, playlistKey: ref.key) }
     }
 
-    private func play(from index: Int) {
-        player.play(items(), startAt: index)
+    private func play(_ list: [Track], from index: Int) {
+        player.play(list.compactMap { model.resolver?.item($0, playlistKey: ref.key) }, startAt: index)
+    }
+
+    private func keep(_ t: Track) {
+        if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j].state = .kept; tracks[j].starred = true }
+        model.keep(t.songId)
     }
 
     private func playAll(shuffle: Bool) {
@@ -248,7 +411,13 @@ struct PlaylistDetailView: View {
                 tracks = try await api.tracks(forKey: ref.key).filter { !removed.contains($0.songId) }
             }
             error = nil
+            offline = false
+            downloads.sync(playlist: ref.key, name: ref.name, comment: ref.comment, tracks: tracks)
         } catch {
+            if downloads.isSaved(playlist: ref.key) {
+                tracks = downloads.tracks(playlist: ref.key)
+                offline = true
+            }
             self.error = error.localizedDescription
         }
         loaded = true
@@ -259,6 +428,7 @@ struct PlaylistDetailView: View {
 struct TrackRow: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(DownloadStore.self) private var downloads
     @Environment(\.pickPlaylist) private var pickPlaylist
     let track: Track
     let playlistKey: String?
@@ -268,23 +438,29 @@ struct TrackRow: View {
     var onTakeOut: (() -> Void)?
     /// Not for me on a new song. A list can pass its own to hide the row straight away.
     var onRemove: (() -> Void)?
+    /// Keep on a new song. A list can pass its own to update the row straight away.
+    var onKeep: (() -> Void)?
     @State private var confirmDelete = false
 
     var body: some View {
         HStack(spacing: 12) {
             Button(action: onPlay) {
                 HStack(spacing: 12) {
-                    Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
+                    Artwork(url: downloads.localCover(track.songId) ?? model.resolver?.artwork(songId: track.songId, size: 120), size: 46)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(track.title).lineLimit(1)
-                            .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
                         HStack(spacing: 6) {
+                            Text(track.title).font(.body.weight(.semibold)).lineLimit(1)
+                                .foregroundStyle(isCurrent ? Theme.amber : Color.white)
+                            if isCurrent { PlayingBars(animating: player.isPlaying) }
+                        }
+                        HStack(spacing: 6) {
+                            DownloadMark(songId: track.songId)
                             if track.state == .new { Badge(text: "New") }
-                            if track.state == .kept { Badge(text: "Kept", color: .green) }
-                            if track.addedByYou { Badge(text: "Added by you", color: .blue) }
+                            if track.state == .kept { Badge(text: "Kept", color: Theme.honey) }
+                            if track.addedByYou { Badge(text: "Added by you", color: Color(hex: 0x93CCFF)) }
                             Text(track.artist).lineLimit(1)
                         }
-                        .font(.caption).foregroundStyle(.secondary)
+                        .font(.caption).foregroundStyle(Theme.textMedium)
                     }
                     Spacer(minLength: 0)
                 }
@@ -294,14 +470,11 @@ struct TrackRow: View {
 
             if track.rating > 0 {
                 Label("\(track.rating)", systemImage: "star.fill").labelStyle(.titleAndIcon)
-                    .font(.caption2).foregroundStyle(.yellow)
+                    .font(.caption2).foregroundStyle(Theme.honey)
             }
             if track.state == .new {
-                Button(action: remove) {
-                    Image(systemName: "hand.thumbsdown").foregroundStyle(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Not for me")
+                CircleIconButton(systemImage: "checkmark", size: 32, label: "Keep") { keep() }
+                CircleIconButton(systemImage: "xmark", size: 32, label: "Not for me", action: remove)
             }
             HeartButton(starred: track.starred) { toggleStar() }
         }
@@ -335,6 +508,11 @@ struct TrackRow: View {
             Button { player.addToQueue(item) } label: { Label("Add to queue", systemImage: "text.append") }
         }
         Button(action: addToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
+        if downloads.isDownloaded(track.songId) {
+            Button { downloads.removeDownload(track.songId) } label: { Label("Remove download", systemImage: "xmark.circle") }
+        } else if !downloads.isDownloading(track.songId) {
+            Button { downloads.download([track]) } label: { Label("Download", systemImage: "arrow.down.circle") }
+        }
         Divider()
         Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: track.starred ? "heart.slash" : "heart") }
         Menu {
@@ -384,6 +562,7 @@ struct TrackRow: View {
     }
 
     private func keep() {
+        if let onKeep { onKeep(); return }
         var t = track
         t.state = .kept
         t.starred = true
@@ -395,6 +574,7 @@ struct TrackRow: View {
 /// A song in select mode: tap anywhere on the row to tick it.
 struct SelectableTrackRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(DownloadStore.self) private var downloads
     let track: Track
     let isSelected: Bool
     let toggle: () -> Void
@@ -404,7 +584,7 @@ struct SelectableTrackRow: View {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .font(.title3)
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-            Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
+            Artwork(url: downloads.localCover(track.songId) ?? model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
             VStack(alignment: .leading, spacing: 3) {
                 Text(track.title).lineLimit(1)
                 Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -415,5 +595,21 @@ struct SelectableTrackRow: View {
         .onTapGesture(perform: toggle)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// A small arrow by a song that's on the phone, or a spinner while it downloads.
+struct DownloadMark: View {
+    @Environment(DownloadStore.self) private var downloads
+    let songId: String
+
+    var body: some View {
+        if downloads.isDownloaded(songId) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                .accessibilityLabel("Downloaded")
+        } else if let p = downloads.progress[songId] {
+            ProgressView(value: max(p, 0.02)).progressViewStyle(.circular).controlSize(.mini)
+                .accessibilityLabel("Downloading")
+        }
     }
 }

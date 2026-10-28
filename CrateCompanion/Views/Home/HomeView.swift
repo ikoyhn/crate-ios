@@ -12,6 +12,8 @@ struct HomeView: View {
     @State private var madeForYou: [Playlist] = []
     @State private var showAllHistory = false
     @State private var loaded = false
+    /// New songs you've kept or passed on from Home: gone from the queue straight away.
+    @State private var decided: Set<String> = []
 
     var body: some View {
         NavigationStack {
@@ -20,9 +22,11 @@ struct HomeView: View {
                     ContentUnavailableView("Home needs Navidrome", systemImage: "music.note.house",
                                            description: Text("Add your Navidrome password under Activity > Change server… to see your library here."))
                 } else {
-                    LazyVStack(alignment: .leading, spacing: 28) {
-                        SongShelf(title: "Up Next", subtitle: upNextReason, songs: upNext)
+                    LazyVStack(alignment: .leading, spacing: 36) {
+                        QuickGrid(playlists: Array(madeForYou.prefix(6)))
+                        curationQueue
                         MadeForYouShelf(playlists: madeForYou)
+                        SongShelf(title: "Up Next", subtitle: upNextReason, songs: upNext)
                         AlbumShelf(title: "Recently played", albums: albums["recent"])
                         AlbumShelf(title: "Recently added", albums: albums["newest"])
                         AlbumShelf(title: "Frequently played", albums: albums["frequent"])
@@ -35,12 +39,64 @@ struct HomeView: View {
                     .padding(.vertical)
                 }
             }
-            .navigationTitle("Home")
+            .crateScreen()
+            .navigationTitle(greeting)
             .navigationDestination(for: NavidromeAlbum.self) { LibraryAlbumView(album: $0) }
             .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .refreshable { await load() }
             .task { if !loaded { await load() } }
             .overlay { if !loaded && model.navidrome != nil { ProgressView() } }
+        }
+    }
+
+    private var greeting: String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<12: "Good morning"
+        case 12..<17: "Good afternoon"
+        default: "Good evening"
+        }
+    }
+
+    /// New songs waiting in your inbox across Crate's playlists: keep them or pass, right here.
+    private struct Waiting: Identifiable {
+        let track: Track
+        let key: String
+        var id: String { track.songId }
+    }
+
+    private var waiting: [Waiting] {
+        var seen = Set<String>()
+        var out: [Waiting] = []
+        for p in madeForYou {
+            for t in p.tracks where t.state == .new && !decided.contains(t.songId) && seen.insert(t.songId).inserted {
+                out.append(Waiting(track: t, key: p.key))
+            }
+        }
+        return out
+    }
+
+    @ViewBuilder
+    private var curationQueue: some View {
+        let queue = waiting
+        if !queue.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                SectionTitle(title: "Waiting for you",
+                             subtitle: "\(queue.count) new song\(queue.count == 1 ? "" : "s") · ✓ keeps it, ✕ passes")
+                ForEach(queue.prefix(3)) { entry in
+                    CurationRow(track: entry.track, playlistKey: entry.key,
+                                onKeep: {
+                                    withAnimation { _ = decided.insert(entry.track.songId) }
+                                    model.keep(entry.track.songId)
+                                },
+                                onPass: {
+                                    withAnimation { _ = decided.insert(entry.track.songId) }
+                                    model.remove(entry.track.songId, title: entry.track.title) {
+                                        decided.remove(entry.track.songId)
+                                    }
+                                })
+                }
+            }
+            .padding(.horizontal)
         }
     }
 
@@ -111,11 +167,13 @@ struct ShelfHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.title3.bold())
-                if let subtitle { Text(subtitle).font(.caption).foregroundStyle(.secondary) }
+                Text(title).font(Theme.headline()).tracking(-0.3)
+                if let subtitle { Text(subtitle).font(.footnote).foregroundStyle(Theme.textMedium) }
             }
             Spacer()
-            if let action { Button(actionLabel, action: action).font(.subheadline) }
+            if let action {
+                Button(actionLabel, action: action).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.amber)
+            }
         }
         .padding(.horizontal)
     }
@@ -164,17 +222,26 @@ struct MadeForYouShelf: View {
     var body: some View {
         if !playlists.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                ShelfHeader(title: "Made for you")
+                ShelfHeader(title: "Made for you", subtitle: "Curated by Crate from your listening")
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(alignment: .top, spacing: 14) {
                         ForEach(playlists, id: \.key) { p in
                             NavigationLink(value: PlaylistRef(key: p.key, name: p.name, comment: p.comment)) {
                                 Card(title: p.name, subtitle: subtitle(p),
-                                     art: p.tracks.first.flatMap { model.resolver?.artwork(songId: $0.songId, size: 300) })
+                                     art: p.tracks.first.flatMap { model.resolver?.artwork(songId: $0.songId, size: 300) },
+                                     size: 160)
                                     .overlay(alignment: .topLeading) {
-                                        Image(systemName: p.kind.symbol)
-                                            .font(.caption.bold()).foregroundStyle(.white)
-                                            .padding(6).background(p.kind.color, in: Circle()).padding(6)
+                                        if p.newCount > 0 {
+                                            Text("\(p.newCount) NEW")
+                                                .font(Theme.caps).tracking(0.6).foregroundStyle(Theme.canvas)
+                                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                                .background(Theme.amber, in: Capsule())
+                                                .padding(8)
+                                        } else {
+                                            Image(systemName: p.kind.symbol)
+                                                .font(.caption.bold()).foregroundStyle(.white)
+                                                .padding(6).background(p.kind.color, in: Circle()).padding(8)
+                                        }
                                     }
                             }
                             .buttonStyle(.plain)
@@ -224,21 +291,23 @@ struct Card: View {
     let subtitle: String
     let art: URL?
     var playing = false
+    var size: CGFloat = 140
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Artwork(url: art, size: 140, corner: 8)
+            Artwork(url: art, size: size, corner: 8)
                 .overlay(alignment: .bottomTrailing) {
                     if playing {
                         Image(systemName: "speaker.wave.2.fill").font(.caption.bold()).foregroundStyle(.white)
                             .padding(6).background(.black.opacity(0.45), in: Circle()).padding(6)
                     }
                 }
-            Text(title).font(.caption.weight(.medium)).lineLimit(1)
-                .foregroundStyle(playing ? Color.accentColor : Color.primary)
-            Text(subtitle).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                .foregroundStyle(playing ? Theme.amber : Color.white)
+                .padding(.top, 4)
+            Text(subtitle).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(2)
         }
-        .frame(width: 140)
+        .frame(width: size, alignment: .leading)
     }
 }
 
@@ -257,12 +326,12 @@ struct SongListRow: View {
             HStack(spacing: 12) {
                 Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title).lineLimit(1)
-                        .foregroundStyle(player.current?.songId == track.songId ? Color.accentColor : Color.primary)
-                    Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    Text(track.title).font(.body.weight(.medium)).lineLimit(1)
+                        .foregroundStyle(player.current?.songId == track.songId ? Theme.amber : Color.white)
+                    Text("\(track.artist) · \(track.album)").font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Text("\(track.plays) play\(track.plays == 1 ? "" : "s")").font(.caption2).foregroundStyle(.secondary)
+                Text("\(track.plays) play\(track.plays == 1 ? "" : "s")").font(.caption2).foregroundStyle(Theme.textLow)
             }
             .padding(.horizontal).padding(.vertical, 4)
             .contentShape(Rectangle())
@@ -289,6 +358,70 @@ struct SongMenu: View {
     }
 }
 
+/// Crate's playlists as compact tiles, two to a row, at the top of Home.
+struct QuickGrid: View {
+    @Environment(AppModel.self) private var model
+    let playlists: [Playlist]
+
+    var body: some View {
+        if !playlists.isEmpty {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+                ForEach(playlists, id: \.key) { p in
+                    NavigationLink(value: PlaylistRef(key: p.key, name: p.name, comment: p.comment)) {
+                        HStack(spacing: 10) {
+                            Artwork(url: p.tracks.first.flatMap { model.resolver?.artwork(songId: $0.songId, size: 160) },
+                                    size: 56, corner: 0)
+                            Text(p.name).font(.footnote.weight(.bold)).lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 0)
+                            if p.newCount > 0 { Circle().fill(Theme.amber).frame(width: 7, height: 7).padding(.trailing, 8) }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Theme.surface2)
+                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    }
+                    .buttonStyle(PressScale())
+                }
+            }
+            .padding(.horizontal)
+        }
+    }
+}
+
+/// A new inbox song with ✕ (pass) and ✓ (keep). Tap the song to hear it.
+struct CurationRow: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AudioPlayer.self) private var player
+    let track: Track
+    let playlistKey: String
+    let onKeep: () -> Void
+    let onPass: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                if let item = model.resolver?.item(track, playlistKey: playlistKey) { player.play(item) }
+            } label: {
+                HStack(spacing: 12) {
+                    Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 48)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(track.title).font(.body.weight(.semibold)).lineLimit(1)
+                            .foregroundStyle(player.current?.songId == track.songId ? Theme.amber : Color.white)
+                        Text(track.artist).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            CircleIconButton(systemImage: "xmark", size: 38, label: "Not for me", action: onPass)
+            CircleIconButton(systemImage: "checkmark", tint: Theme.amber, filled: true, size: 38, label: "Keep", action: onKeep)
+        }
+        .padding(10)
+        .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+}
+
 // MARK: - album
 
 /// An album from your Navidrome library.
@@ -304,19 +437,15 @@ struct LibraryAlbumView: View {
         List {
             VStack(spacing: 10) {
                 Artwork(url: model.navidrome?.coverURL(id: album.coverArt ?? album.id, size: 600), size: 220, corner: 10)
-                Text(album.name).font(.title3.bold()).multilineTextAlignment(.center)
+                Text(album.name).font(Theme.display(24)).tracking(-0.5).multilineTextAlignment(.center)
                 Text([album.artist, album.year.map { String($0) }].compactMap { $0 }.joined(separator: " · "))
-                    .font(.subheadline).foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Button { play(from: 0) } label: { Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent)
-                    Button { play(from: 0, shuffle: true) } label: { Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity) }
-                        .buttonStyle(.bordered)
-                }
-                .disabled(tracks.isEmpty)
+                    .font(.subheadline).foregroundStyle(Theme.textMedium)
+                PlayShuffleRow(onPlay: { play(from: 0) }, onShuffle: { play(from: 0, shuffle: true) })
+                    .disabled(tracks.isEmpty)
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .frame(maxWidth: .infinity)
+            .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
             if !loaded { ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden) }
@@ -324,9 +453,11 @@ struct LibraryAlbumView: View {
                 TrackRow(track: t, playlistKey: nil, isCurrent: player.current?.songId == t.songId,
                          onPlay: { play(from: i) },
                          onChange: { updated in if let j = tracks.firstIndex(where: { $0.id == t.id }) { tracks[j] = updated } })
+                    .listRowBackground(Color.clear)
             }
         }
         .listStyle(.plain)
+        .crateScreen()
         .navigationTitle(album.name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
