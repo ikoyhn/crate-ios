@@ -1,83 +1,130 @@
-"""Draws the app icon: vinyl records standing in an amber crate, on Crate's warm charcoal.
+"""Draws the app icon: a 90s retro sunset that's also a record player. The striped sun is the
+record (grooves, a spindle) with a chrome tonearm resting on it, over a neon grid horizon.
 Usage: make_icon.py <output.png>   (needs Pillow; writes a 1024x1024 PNG with no transparency)"""
 import sys
 
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
 S = 4  # drawn at 4x and scaled down, for smooth edges
 W = 1024 * S
 
 
 def px(v):
-    return int(v * S)
+    return int(round(v * S))
 
 
 def rgb(h):
     return ((h >> 16) & 255, (h >> 8) & 255, h & 255)
 
 
-def vertical_gradient(size, top, bottom):
+def gradient(size, stops):
+    """Vertical gradient through (position 0..1, colour) stops."""
     w, h = size
-    g = Image.new("RGB", (1, h))
+    col = Image.new("RGB", (1, h))
     for y in range(h):
         t = y / max(h - 1, 1)
-        g.putpixel((0, y), tuple(int(a + (b - a) * t) for a, b in zip(top, bottom)))
-    return g.resize((w, h))
+        for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+            if p0 <= t <= p1:
+                f = (t - p0) / max(p1 - p0, 1e-9)
+                col.putpixel((0, y), tuple(int(a + (b - a) * f) for a, b in zip(rgb(c0), rgb(c1))))
+                break
+    return col.resize((w, h))
 
 
-# Canvas: charcoal, a touch lighter at the top, with an amber glow behind the crate
-img = vertical_gradient((W, W), rgb(0x232120), rgb(0x0E0E0E))
-glow = Image.new("L", (W, W), 0)
-ImageDraw.Draw(glow).ellipse([px(150), px(260), px(874), px(984)], fill=120)
-glow = glow.filter(ImageFilter.GaussianBlur(px(150)))
-img = Image.composite(Image.new("RGB", (W, W), rgb(0xF97316)), img, glow)
+def glow(img, shape, colour, blur, strength):
+    """Add a soft coloured light in the shape of a mask."""
+    m = shape.filter(ImageFilter.GaussianBlur(px(blur))).point(lambda v: int(v * strength))
+    return Image.composite(Image.new("RGB", img.size, rgb(colour)), img, m)
 
+
+HORIZON = 700
+
+# Sky: deep indigo to violet to hot pink at the horizon
+img = gradient((W, W), [(0, 0x120A2E), (0.42, 0x3B1263), (0.66, 0xB0246E), (HORIZON / 1024, 0xFF5E7A),
+                        (HORIZON / 1024 + 0.001, 0x16072E), (1, 0x0A0418)])
+
+# The sun / record
+cx, cy, r = 470, 470, 300
+disc = Image.new("L", (W, W), 0)
+ImageDraw.Draw(disc).ellipse([px(cx - r), px(cy - r), px(cx + r), px(cy + r)], fill=255)
+# it sets behind the horizon
+ImageDraw.Draw(disc).rectangle([0, px(HORIZON - 4), W, W], fill=0)
+img = glow(img, disc, 0xFF4F8B, 70, 0.55)
+
+sun = gradient((W, W), [(0, 0xFFE76A), ((cy - r) / 1024, 0xFFE76A), (cy / 1024, 0xFFA23A),
+                        ((cy + r) / 1024, 0xFF3D7F), (1, 0xFF3D7F)])
+# Retro stripe cuts across the lower half, thicker towards the bottom
+cuts = Image.new("L", (W, W), 255)
+d = ImageDraw.Draw(cuts)
+y, gap = cy + 40, 8
+while y < cy + r:
+    d.rectangle([0, px(y), W, px(y + gap)], fill=0)
+    y += gap + 30 - gap * 0.6
+    gap += 5
+sun_mask = ImageChops.multiply(disc, cuts)
+img = Image.composite(sun, img, sun_mask)
+
+# Faint grooves, a centre label and the spindle: it's a record
+grooves = Image.new("L", (W, W), 0)
+g = ImageDraw.Draw(grooves)
+for gr in range(r - 22, 96, -18):
+    g.ellipse([px(cx - gr), px(cy - gr), px(cx + gr), px(cy + gr)], outline=60, width=px(2.5))
+grooves = ImageChops.multiply(grooves, sun_mask)
+img = Image.composite(Image.new("RGB", (W, W), rgb(0xB0246E)), img, grooves)
 draw = ImageDraw.Draw(img)
+draw.ellipse([px(cx - 82), px(cy - 82), px(cx + 82), px(cy + 82)], fill=rgb(0xFF7A45))
+draw.ellipse([px(cx - 82), px(cy - 82), px(cx + 82), px(cy + 82)], outline=rgb(0xFFD15C), width=px(5))
+draw.ellipse([px(cx - 15), px(cy - 15), px(cx + 15), px(cy + 15)], fill=rgb(0x1A0B33))
 
-# Records, back to front: dark vinyl with fine grooves and a warm label
-records = [  # centre x, centre y, radius, label colour
-    (352, 478, 212, 0xF59E0B),
-    (672, 478, 212, 0xFB7185),
-    (512, 400, 236, 0xF97316),
-]
-for cx, cy, r, label in records:
-    shadow = Image.new("L", (W, W), 0)
-    ImageDraw.Draw(shadow).ellipse([px(cx - r), px(cy - r + 14), px(cx + r), px(cy + r + 14)], fill=150)
-    shadow = shadow.filter(ImageFilter.GaussianBlur(px(18)))
-    img = Image.composite(Image.new("RGB", (W, W), (0, 0, 0)), img, shadow)
-    draw = ImageDraw.Draw(img)
-    draw.ellipse([px(cx - r), px(cy - r), px(cx + r), px(cy + r)], fill=rgb(0x0B0B0B))
-    for gr in range(r - 14, 92, -16):  # grooves
-        draw.ellipse([px(cx - gr), px(cy - gr), px(cx + gr), px(cy + gr)], outline=rgb(0x1E1E1E), width=px(2))
-    # a soft sheen across the top left of the vinyl
-    sheen = Image.new("L", (W, W), 0)
-    ImageDraw.Draw(sheen).pieslice([px(cx - r + 10), px(cy - r + 10), px(cx + r - 10), px(cy + r - 10)],
-                                   200, 250, fill=40)
-    sheen = sheen.filter(ImageFilter.GaussianBlur(px(10)))
-    img = Image.composite(Image.new("RGB", (W, W), (255, 255, 255)), img, sheen)
-    draw = ImageDraw.Draw(img)
-    lr = 74
-    draw.ellipse([px(cx - lr), px(cy - lr), px(cx + lr), px(cy + lr)], fill=rgb(label))
-    draw.ellipse([px(cx - 12), px(cy - 12), px(cx + 12), px(cy + 12)], fill=rgb(0x0B0B0B))
+# Neon grid floor below the horizon
+vx = 512
+floor_lines = Image.new("L", (W, W), 0)
+fl = ImageDraw.Draw(floor_lines)
+for i in range(-14, 15):
+    fl.line([(px(vx + i * 26), px(HORIZON)), (px(vx + i * 150), px(1024))], fill=255, width=px(3))
+z = 1.0
+for _ in range(9):
+    yy = HORIZON + (1024 - HORIZON) * (z ** 2.2)
+    fl.line([(0, px(yy)), (W, px(yy))], fill=255, width=px(3))
+    z -= 0.11
+below = Image.new("L", (W, W), 0)
+ImageDraw.Draw(below).rectangle([0, px(HORIZON), W, W], fill=255)
+floor_lines = ImageChops.multiply(floor_lines, below)
+img = glow(img, floor_lines, 0xFF3DCB, 6, 0.9)
+img = Image.composite(Image.new("RGB", (W, W), rgb(0xFF6BD9)), img, floor_lines)
+# the horizon line itself, glowing cyan
+hz = Image.new("L", (W, W), 0)
+ImageDraw.Draw(hz).rectangle([0, px(HORIZON - 3), W, px(HORIZON + 3)], fill=255)
+img = glow(img, hz, 0x3DE0FF, 14, 1.0)
+img = Image.composite(Image.new("RGB", (W, W), rgb(0xB8F4FF)), img, hz)
 
-# Crate front: a soft shadow above it onto the records, then the amber box with slats and a handle
-x0, y0, x1, y1, rad = 150, 572, 874, 892, 56
-shadow = Image.new("L", (W, W), 0)
-ImageDraw.Draw(shadow).rounded_rectangle([px(x0), px(y0 - 26), px(x1), px(y1)], px(rad), fill=170)
-shadow = shadow.filter(ImageFilter.GaussianBlur(px(22)))
-img = Image.composite(Image.new("RGB", (W, W), (0, 0, 0)), img, shadow)
-
-box = vertical_gradient((px(x1 - x0), px(y1 - y0)), rgb(0xFB8A2E), rgb(0xE35A0B))
-mask = Image.new("L", box.size, 0)
-ImageDraw.Draw(mask).rounded_rectangle([0, 0, box.size[0] - 1, box.size[1] - 1], px(rad), fill=255)
-img.paste(box, (px(x0), px(y0)), mask)
+# Tonearm: pivot at the top right, arm down to a headshell resting on the record's edge
+arm = Image.new("L", (W, W), 0)
+a = ImageDraw.Draw(arm)
+pivot = (846, 214)
+elbow = (826, 500)
+head = (676, 606)
+a.line([px(pivot[0]), px(pivot[1]), px(elbow[0]), px(elbow[1])], fill=255, width=px(22))
+a.line([px(elbow[0]), px(elbow[1]), px(head[0]), px(head[1])], fill=255, width=px(22))
+a.ellipse([px(elbow[0] - 11), px(elbow[1] - 11), px(elbow[0] + 11), px(elbow[1] + 11)], fill=255)
+# headshell: a short, wider block at the end
+hs = Image.new("L", (W, W), 0)
+ImageDraw.Draw(hs).polygon([(px(x), px(y)) for x, y in [(666, 578), (716, 616), (686, 654), (636, 616)]], fill=255)
+arm = ImageChops.lighter(arm, hs)
+shadow = arm.filter(ImageFilter.GaussianBlur(px(10)))
+img = Image.composite(Image.new("RGB", (W, W), rgb(0x12062A)),
+                      img, ImageChops.offset(shadow, px(10), px(14)).point(lambda v: int(v * 0.7)))
+chrome = gradient((W, W), [(0, 0xFFFFFF), (0.5, 0xE4D8FF), (1, 0xB9A6E8)])
+img = Image.composite(chrome, img, arm)
 draw = ImageDraw.Draw(img)
-
-# top edge highlight, slat grooves, handle cut-out
-draw.rounded_rectangle([px(x0 + 34), px(y0 + 10), px(x1 - 34), px(y0 + 20)], px(5), fill=rgb(0xFDA35C))
-for sy in (750, 822):
-    draw.rounded_rectangle([px(x0 + 40), px(sy), px(x1 - 40), px(sy + 10)], px(5), fill=rgb(0xC2470A))
-draw.rounded_rectangle([px(422), px(626), px(602), px(682)], px(28), fill=rgb(0x2A1406))
+# pivot base and counterweight
+draw.ellipse([px(pivot[0] - 54), px(pivot[1] - 54), px(pivot[0] + 54), px(pivot[1] + 54)], fill=rgb(0x2A1550))
+draw.ellipse([px(pivot[0] - 54), px(pivot[1] - 54), px(pivot[0] + 54), px(pivot[1] + 54)],
+             outline=rgb(0xE4D8FF), width=px(6))
+draw.ellipse([px(pivot[0] - 20), px(pivot[1] - 20), px(pivot[0] + 20), px(pivot[1] + 20)], fill=rgb(0xE4D8FF))
+draw.line([px(pivot[0]), px(pivot[1] - 50), px(pivot[0]), px(pivot[1] - 80)], fill=rgb(0xE4D8FF), width=px(14))
+draw.rounded_rectangle([px(pivot[0] - 26), px(pivot[1] - 120), px(pivot[0] + 26), px(pivot[1] - 76)],
+                       px(10), fill=rgb(0xC9B8F2))
 
 img = img.resize((1024, 1024), Image.LANCZOS)
 img.save(sys.argv[1] if len(sys.argv) > 1 else "AppIcon.png", optimize=True)
