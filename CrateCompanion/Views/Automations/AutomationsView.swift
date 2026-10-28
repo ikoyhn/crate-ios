@@ -8,6 +8,7 @@ struct AutomationsView: View {
     @State private var draft = NewPrompt(prompt: "")
     @State private var creating = false
     @State private var forgetting: PromptPlaylist?
+    @FocusState private var typingPrompt: Bool
 
     /// The playlist jobs first, then housekeeping.
     private struct Entry { let job: String; let about: String }
@@ -42,6 +43,13 @@ struct AutomationsView: View {
                     Text("Deletes extra copies of Crate's playlists in Navidrome, and Daily Mixes that aren't made any more.")
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .toolbar {
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Done") { typingPrompt = false }.bold()
+                }
+            }
             .navigationTitle("Create")
             .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .task(id: model.dataVersion) { await load() }
@@ -61,6 +69,14 @@ struct AutomationsView: View {
         Section {
             TextField("Warm, slow songs for a rainy Sunday", text: $draft.prompt, axis: .vertical)
                 .lineLimit(2...5)
+                .focused($typingPrompt)
+                .submitLabel(.done)
+                .onChange(of: draft.prompt) { _, text in
+                    // A multi-line field types a newline on Return: treat it as Done instead
+                    guard text.contains("\n") else { return }
+                    draft.prompt = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                    typingPrompt = false
+                }
             Stepper("\(draft.size) songs", value: $draft.size, in: 5...150, step: 5)
             Stepper(draft.newTracks == 0 ? "Only songs I have" : "Up to \(draft.newTracks) new songs",
                     value: $draft.newTracks, in: 0...min(30, draft.size - 1))
@@ -106,6 +122,7 @@ struct AutomationsView: View {
     }
 
     private func create() {
+        typingPrompt = false
         creating = true
         let p = draft
         Task {

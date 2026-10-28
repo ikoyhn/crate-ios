@@ -9,6 +9,7 @@ struct CrateApp: App {
             RootView()
                 .environment(model)
                 .environment(model.player)
+                .environment(model.downloads)
                 .tint(.accentColor)
         }
     }

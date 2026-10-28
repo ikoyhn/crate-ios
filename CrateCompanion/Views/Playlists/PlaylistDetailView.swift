@@ -4,6 +4,7 @@ import SwiftUI
 struct PlaylistDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(DownloadStore.self) private var downloads
     let ref: PlaylistRef
 
     enum Tab: String, CaseIterable { case tracks = "Songs", suggested = "Suggested" }
@@ -20,6 +21,8 @@ struct PlaylistDetailView: View {
     @State private var confirmDeleteSelected = false
     /// Songs you've removed: hidden straight away, even before Crate's job deletes them.
     @State private var removed: Set<String> = []
+    /// Couldn't reach the server: showing the copy saved on the phone.
+    @State private var offline = false
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -91,9 +94,22 @@ struct PlaylistDetailView: View {
                     .buttonStyle(.bordered)
             }
             .disabled(tracks.isEmpty)
-            if let error { Text(error).font(.caption).foregroundStyle(.red) }
+            if downloads.isSaved(playlist: ref.key) { downloadStatus }
+            if offline {
+                Label("Offline: showing the songs downloaded to this phone", systemImage: "wifi.slash")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let error {
+                Text(error).font(.caption).foregroundStyle(.red)
+            }
         }
         .listRowSeparator(.hidden)
+    }
+
+    private var downloadStatus: some View {
+        let (have, total) = downloads.counts(playlist: ref.key)
+        return Label(have >= total ? "Downloaded" : "Downloading \(have) of \(total)",
+                     systemImage: have >= total ? "arrow.down.circle.fill" : "arrow.down.circle")
+            .font(.caption).foregroundStyle(have >= total ? Color.accentColor : .secondary)
     }
 
     @ToolbarContentBuilder
@@ -108,6 +124,7 @@ struct PlaylistDetailView: View {
                 Menu {
                     Button { addingSelected = true } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
                     Button { loveSelected() } label: { Label("Love", systemImage: "heart") }
+                    Button { downloadSelected() } label: { Label("Download", systemImage: "arrow.down.circle") }
                     Divider()
                     Button { playSelected(next: false) } label: { Label("Play", systemImage: "play") }
                     Button { playSelected(next: true) } label: { Label("Add to queue", systemImage: "text.append") }
@@ -136,15 +153,23 @@ struct PlaylistDetailView: View {
     private var toolbarMenu: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                if regenerateJob != nil || promptId != nil {
-                    Button { confirmRegenerate = true } label: { Label("Rebuild now", systemImage: "arrow.triangle.2.circlepath") }
+                if downloads.isSaved(playlist: ref.key) {
+                    Button(role: .destructive) { downloads.removePlaylist(ref.key) } label: {
+                        Label("Remove download", systemImage: "xmark.circle")
+                    }
+                } else {
+                    Button { downloadPlaylist() } label: { Label("Download", systemImage: "arrow.down.circle") }
+                        .disabled(tracks.isEmpty)
                 }
-                Button { tab = .suggested } label: { Label("Suggested songs", systemImage: "sparkles") }
+                if ref.kind != .liked {  // nothing to rebuild or suggest for Liked Songs
+                    if regenerateJob != nil || promptId != nil {
+                        Button { confirmRegenerate = true } label: { Label("Rebuild now", systemImage: "arrow.triangle.2.circlepath") }
+                    }
+                    Button { tab = .suggested } label: { Label("Suggested songs", systemImage: "sparkles") }
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
-            .opacity(ref.kind == .liked ? 0 : 1)  // nothing to rebuild or suggest for Liked Songs
-            .disabled(ref.kind == .liked)
         }
     }
 
@@ -200,6 +225,18 @@ struct PlaylistDetailView: View {
         endSelecting()
     }
 
+    private func downloadSelected() {
+        downloads.download(selected.compactMap { id in tracks.first { $0.songId == id } })
+        model.say("Downloading \(selected.count) songs")
+        endSelecting()
+    }
+
+    /// Saved on the phone, and kept in step with the playlist whenever it's opened online.
+    private func downloadPlaylist() {
+        downloads.save(playlist: ref.key, name: ref.name, comment: ref.comment, tracks: tracks)
+        model.say("Downloading \(ref.name)")
+    }
+
     /// Play the selection now, or add it to the end of the queue.
     private func playSelected(next: Bool) {
         let chosen = selected.compactMap { id in tracks.first { $0.songId == id } }
@@ -248,7 +285,13 @@ struct PlaylistDetailView: View {
                 tracks = try await api.tracks(forKey: ref.key).filter { !removed.contains($0.songId) }
             }
             error = nil
+            offline = false
+            downloads.sync(playlist: ref.key, name: ref.name, comment: ref.comment, tracks: tracks)
         } catch {
+            if downloads.isSaved(playlist: ref.key) {
+                tracks = downloads.tracks(playlist: ref.key)
+                offline = true
+            }
             self.error = error.localizedDescription
         }
         loaded = true
@@ -259,6 +302,7 @@ struct PlaylistDetailView: View {
 struct TrackRow: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(DownloadStore.self) private var downloads
     @Environment(\.pickPlaylist) private var pickPlaylist
     let track: Track
     let playlistKey: String?
@@ -274,11 +318,12 @@ struct TrackRow: View {
         HStack(spacing: 12) {
             Button(action: onPlay) {
                 HStack(spacing: 12) {
-                    Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
+                    Artwork(url: downloads.localCover(track.songId) ?? model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(track.title).lineLimit(1)
                             .foregroundStyle(isCurrent ? Color.accentColor : Color.primary)
                         HStack(spacing: 6) {
+                            DownloadMark(songId: track.songId)
                             if track.state == .new { Badge(text: "New") }
                             if track.state == .kept { Badge(text: "Kept", color: .green) }
                             if track.addedByYou { Badge(text: "Added by you", color: .blue) }
@@ -335,6 +380,11 @@ struct TrackRow: View {
             Button { player.addToQueue(item) } label: { Label("Add to queue", systemImage: "text.append") }
         }
         Button(action: addToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
+        if downloads.isDownloaded(track.songId) {
+            Button { downloads.removeDownload(track.songId) } label: { Label("Remove download", systemImage: "xmark.circle") }
+        } else if !downloads.isDownloading(track.songId) {
+            Button { downloads.download([track]) } label: { Label("Download", systemImage: "arrow.down.circle") }
+        }
         Divider()
         Button { toggleStar() } label: { Label(track.starred ? "Unlove" : "Love", systemImage: track.starred ? "heart.slash" : "heart") }
         Menu {
@@ -395,6 +445,7 @@ struct TrackRow: View {
 /// A song in select mode: tap anywhere on the row to tick it.
 struct SelectableTrackRow: View {
     @Environment(AppModel.self) private var model
+    @Environment(DownloadStore.self) private var downloads
     let track: Track
     let isSelected: Bool
     let toggle: () -> Void
@@ -404,7 +455,7 @@ struct SelectableTrackRow: View {
             Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                 .font(.title3)
                 .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-            Artwork(url: model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
+            Artwork(url: downloads.localCover(track.songId) ?? model.resolver?.artwork(songId: track.songId, size: 120), size: 44)
             VStack(alignment: .leading, spacing: 3) {
                 Text(track.title).lineLimit(1)
                 Text(track.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -415,5 +466,21 @@ struct SelectableTrackRow: View {
         .onTapGesture(perform: toggle)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+}
+
+/// A small arrow by a song that's on the phone, or a spinner while it downloads.
+struct DownloadMark: View {
+    @Environment(DownloadStore.self) private var downloads
+    let songId: String
+
+    var body: some View {
+        if downloads.isDownloaded(songId) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+                .accessibilityLabel("Downloaded")
+        } else if let p = downloads.progress[songId] {
+            ProgressView(value: max(p, 0.02)).progressViewStyle(.circular).controlSize(.mini)
+                .accessibilityLabel("Downloading")
+        }
     }
 }

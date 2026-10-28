@@ -50,6 +50,7 @@ final class AppModel {
     /// Bumped whenever something finishes that could change what's on screen; views reload on it.
     var dataVersion = 0
     let player = AudioPlayer()
+    let downloads = DownloadStore()
 
     @ObservationIgnored private var statusTask: Task<Void, Never>?
     /// Navidrome playlist id -> cover art ids of its first four albums.
@@ -61,6 +62,10 @@ final class AppModel {
         }
         player.onLike = { [weak self] item, starred in self?.setStar(item.songId, starred, addTo: item.likeAddsTo) }
         player.onError = { [weak self] message in self?.say(message) }
+        player.localFile = { [weak self] id in self?.downloads.localFile(id) }
+        player.localCover = { [weak self] id in self?.downloads.localCover(id) }
+        downloads.resolver = { [weak self] in self?.resolver }
+        downloads.onError = { [weak self] message in self?.say(message) }
     }
 
     var isConnected: Bool { crate != nil }
