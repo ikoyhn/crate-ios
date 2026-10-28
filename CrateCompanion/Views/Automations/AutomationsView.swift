@@ -55,11 +55,17 @@ struct AutomationsView: View {
             .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .task(id: model.dataVersion) { await load() }
             .refreshable { await load(); await model.refreshStatus() }
-            .confirmationDialog("Forget this prompt playlist?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
+            .confirmationDialog("Remove this prompt playlist?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }),
                                 titleVisibility: .visible, presenting: forgetting) { p in
-                Button("Forget", role: .destructive) { forget(p) }
+                Button("Delete playlist", role: .destructive) {
+                    Task {
+                        if await model.deletePlaylist(key: p.playlistKey, name: p.name ?? p.prompt) { await load() }
+                    }
+                }
+                Button("Keep it in Navidrome") { forget(p) }
             } message: { _ in
-                Text("Crate stops managing it. The playlist stays in Navidrome; new tracks it downloaded that you haven't kept are deleted.")
+                Text("Crate stops making it either way, and new songs it downloaded that you haven't kept are deleted. "
+                     + "Delete also removes the playlist from Navidrome.")
             }
         }
     }

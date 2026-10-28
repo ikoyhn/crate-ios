@@ -19,6 +19,8 @@ struct PlaylistsView: View {
     @State private var liked: [Track]?
     @State private var loaded = false
     @State private var unreachable = false
+    /// Waiting for "Delete playlist?" to be confirmed.
+    @State private var deleting: PlaylistRef?
 
     var body: some View {
         NavigationStack {
@@ -62,23 +64,35 @@ struct PlaylistsView: View {
                             .foregroundStyle(.secondary)
                     }
                     ForEach(sorted) { p in
-                        NavigationLink(value: PlaylistRef(key: p.key, name: p.name, comment: p.comment)) {
+                        let ref = PlaylistRef(key: p.key, name: p.name, comment: p.comment)
+                        NavigationLink(value: ref) {
                             PlaylistRow(name: p.name, subtitle: subtitle(p), kind: p.kind,
                                         cover: p.tracks.first.flatMap { model.resolver?.artwork(songId: $0.songId, size: 120) })
                         }
+                        .deletable(ref, model: model) { deleting = $0 }
                     }
                 }
                 Section("Your playlists") {
                     if let ownError { Text(ownError).foregroundStyle(.secondary) }
                     ForEach(own) { p in
-                        NavigationLink(value: PlaylistRef(key: p.key, name: p.name, comment: p.comment, readonly: p.readonly)) {
+                        let ref = PlaylistRef(key: p.key, name: p.name, comment: p.comment, readonly: p.readonly)
+                        NavigationLink(value: ref) {
                             PlaylistRow(name: p.name, subtitle: "\(p.count) songs", kind: .own, cover: nil,
                                         navidromeId: p.navidromeId)
                         }
+                        .deletable(ref, model: model) { deleting = $0 }
                     }
                 }
             }
             .crateScreen()
+            .confirmationDialog("Delete “\(deleting?.name ?? "")”?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                                titleVisibility: .visible, presenting: deleting) { ref in
+                Button("Delete playlist", role: .destructive) { delete(ref) }
+            } message: { ref in
+                Text(ref.kind == .prompt
+                     ? "Deletes the playlist from Navidrome and Crate stops making it. Songs you kept stay in your library."
+                     : "Deletes the playlist from Navidrome. Its songs stay in your library.")
+            }
             .navigationTitle("Playlists")
             .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .refreshable { await load() }
@@ -88,6 +102,16 @@ struct PlaylistsView: View {
     }
 
     private var sorted: [Playlist] { playlists.madeForYouOrder() }
+
+    private func delete(_ ref: PlaylistRef) {
+        Task {
+            guard await model.deletePlaylist(key: ref.key, name: ref.name) else { return }
+            withAnimation {
+                playlists.removeAll { $0.key == ref.key }
+                own.removeAll { $0.key == ref.key }
+            }
+        }
+    }
 
     private var downloadsSubtitle: String {
         let n = downloads.songs.count
@@ -199,5 +223,23 @@ extension [Playlist] {
             }
         }
         return sorted { rank($0) < rank($1) }
+    }
+}
+
+extension View {
+    /// Swipe and long-press "Delete" on a playlist row, for playlists that can be deleted.
+    @ViewBuilder
+    func deletable(_ ref: PlaylistRef, model: AppModel, ask: @escaping (PlaylistRef) -> Void) -> some View {
+        if model.canDelete(playlistKey: ref.key, readonly: ref.readonly) {
+            self
+                .swipeActions(edge: .trailing) {
+                    Button(role: .destructive) { ask(ref) } label: { Label("Delete", systemImage: "trash") }
+                }
+                .contextMenu {
+                    Button(role: .destructive) { ask(ref) } label: { Label("Delete playlist…", systemImage: "trash") }
+                }
+        } else {
+            self
+        }
     }
 }
