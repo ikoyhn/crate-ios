@@ -40,6 +40,7 @@ struct ActivityView: View {
                 }
                 settings
             }
+            .crateScreen()
             .navigationTitle("Activity")
             .navigationDestination(for: Run.self) { RunDetailView(run: $0) }
             .task(id: model.dataVersion) { await load() }
@@ -101,6 +102,7 @@ struct ActivityView: View {
                         Task { model.track(await model.attempt { try await $0.clearHistory(keepDislikes: keepDislikes) }, "Clear history") }
                     }
                 }
+                .crateScreen()
                 .navigationTitle("Clear history")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { showReset = false } } }
@@ -179,6 +181,7 @@ struct RunDetailView: View {
             }
             .onChange(of: run.log) { if run.isActive { withAnimation { proxy.scrollTo("end") } } }
         }
+        .background(Theme.canvas.ignoresSafeArea())
         .navigationTitle(model.jobLabel(run.kind))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

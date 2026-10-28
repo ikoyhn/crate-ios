@@ -15,21 +15,17 @@ struct ArtistView: View {
         List {
             VStack(spacing: 10) {
                 Artwork(url: model.navidrome?.coverURL(id: artist.coverArt ?? artist.id, size: 600), size: 160, corner: 80)
-                Text(artist.name).font(.title2.bold()).multilineTextAlignment(.center)
+                Text(artist.name).font(Theme.display(28)).tracking(-0.6).multilineTextAlignment(.center)
                 if loaded {
                     Text("\(albums.count) album\(albums.count == 1 ? "" : "s") · \(songs.count) song\(songs.count == 1 ? "" : "s")")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                        .font(.subheadline).foregroundStyle(Theme.textMedium)
                 }
-                HStack(spacing: 12) {
-                    Button { play(from: 0) } label: { Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity) }
-                        .buttonStyle(.borderedProminent)
-                    Button { play(from: 0, shuffle: true) } label: { Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity) }
-                        .buttonStyle(.bordered)
-                }
-                .disabled(songs.isEmpty)
+                PlayShuffleRow(onPlay: { play(from: 0) }, onShuffle: { play(from: 0, shuffle: true) })
+                    .disabled(songs.isEmpty)
                 if let error { Text(error).font(.caption).foregroundStyle(.red) }
             }
             .frame(maxWidth: .infinity)
+            .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
 
             if !loaded { ProgressView().frame(maxWidth: .infinity).listRowSeparator(.hidden) }
@@ -48,6 +44,7 @@ struct ArtistView: View {
                         .padding(.vertical, 4)
                     }
                     .listRowInsets(EdgeInsets(top: 0, leading: 16, bottom: 0, trailing: 16))
+                    .listRowBackground(Color.clear)
                 }
             }
             if !songs.isEmpty {
@@ -59,11 +56,13 @@ struct ArtistView: View {
                                  onChange: { updated in
                                      if let j = songs.firstIndex(where: { $0.songId == t.songId }) { songs[j] = updated }
                                  })
+                        .listRowBackground(Color.clear)
                     }
                 }
             }
         }
         .listStyle(.plain)
+        .crateScreen()
         .navigationTitle(artist.name)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: model.dataVersion) { await load() }

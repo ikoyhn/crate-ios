@@ -11,39 +11,40 @@ struct AutomationsView: View {
     @FocusState private var typingPrompt: Bool
 
     /// The playlist jobs first, then housekeeping.
-    private struct Entry { let job: String; let about: String }
+    private struct Entry { let job: String; let about: String; let symbol: String }
     private let order = [
-        Entry(job: "discover", about: "New-to-you songs picked by sound, every Monday."),
-        Entry(job: "release_radar", about: "New releases from artists you play, every Friday."),
-        Entry(job: "daily_mix", about: "Your library grouped by sound, refreshed daily. Nothing downloaded."),
-        Entry(job: "library", about: "Read new songs from Navidrome and analyse their sound."),
-        Entry(job: "likes", about: "Keep anything you've loved or rated 4–5, remove 1–2s."),
-        Entry(job: "radio_sync", about: "Copy your likes to the radio user."),
-        Entry(job: "ytdlp_update", about: "Update the YouTube downloader."),
+        Entry(job: "discover", about: "New-to-you songs picked by sound, every Monday.", symbol: "sparkles"),
+        Entry(job: "release_radar", about: "New releases from artists you play, every Friday.", symbol: "dot.radiowaves.left.and.right"),
+        Entry(job: "daily_mix", about: "Your library grouped by sound, refreshed daily. Nothing downloaded.", symbol: "sun.max"),
+        Entry(job: "library", about: "Read new songs from Navidrome and analyse their sound.", symbol: "waveform"),
+        Entry(job: "likes", about: "Keep anything you've loved or rated 4–5, remove 1–2s.", symbol: "heart"),
+        Entry(job: "radio_sync", about: "Copy your likes to the radio user.", symbol: "antenna.radiowaves.left.and.right"),
+        Entry(job: "ytdlp_update", about: "Update the YouTube downloader.", symbol: "arrow.down.app"),
     ]
+
+    private let quickPrompts = ["Energetic gym run", "Rainy day lo-fi", "Sunset on the beach",
+                                "Late-night drive", "Ambient focus", "80s synth nostalgia"]
 
     var body: some View {
         NavigationStack {
-            Form {
-                if !(model.status?.busy.isEmpty ?? true) {
-                    Section { BusyBanner().listRowInsets(EdgeInsets()) }
-                }
-                composer
-                if !prompts.isEmpty { promptList }
-                Section("Playlists and jobs") {
-                    ForEach(order.filter { model.status?.jobs[$0.job] != nil }, id: \.job) { entry in
-                        JobRow(job: entry.job, about: entry.about)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 32) {
+                    if !(model.status?.busy.isEmpty ?? true) { BusyBanner() }
+                    composer
+                    if !prompts.isEmpty { promptList }
+                    jobs
+                    VStack(alignment: .leading, spacing: 8) {
+                        PillButton(title: "Remove duplicate playlists", systemImage: "square.stack.3d.up.slash") {
+                            Task { model.track(await model.attempt { try await $0.removeDuplicatePlaylists() }, "Remove duplicates") }
+                        }
+                        Text("Deletes extra copies of Crate's playlists in Navidrome, and Daily Mixes that aren't made any more.")
+                            .font(.caption).foregroundStyle(Theme.textLow)
                     }
                 }
-                Section {
-                    Button("Remove duplicate playlists") {
-                        Task { model.track(await model.attempt { try await $0.removeDuplicatePlaylists() }, "Remove duplicates") }
-                    }
-                } footer: {
-                    Text("Deletes extra copies of Crate's playlists in Navidrome, and Daily Mixes that aren't made any more.")
-                }
+                .padding(.horizontal).padding(.vertical, 8)
             }
             .scrollDismissesKeyboard(.interactively)
+            .crateScreen()
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -65,58 +66,133 @@ struct AutomationsView: View {
 
     // MARK: - prompt playlists
 
+    private var canCreate: Bool { draft.prompt.trimmingCharacters(in: .whitespaces).count >= 3 && !creating }
+
     private var composer: some View {
-        Section {
-            TextField("Warm, slow songs for a rainy Sunday", text: $draft.prompt, axis: .vertical)
-                .lineLimit(2...5)
-                .focused($typingPrompt)
-                .submitLabel(.done)
-                .onChange(of: draft.prompt) { _, text in
-                    // A multi-line field types a newline on Return: treat it as Done instead
-                    guard text.contains("\n") else { return }
-                    draft.prompt = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
-                    typingPrompt = false
-                }
-            Stepper("\(draft.size) songs", value: $draft.size, in: 5...150, step: 5)
-            Stepper(draft.newTracks == 0 ? "Only songs I have" : "Up to \(draft.newTracks) new songs",
-                    value: $draft.newTracks, in: 0...min(30, draft.size - 1))
-            Toggle("Refresh weekly", isOn: $draft.autoRefresh)
-            Button {
-                create()
-            } label: {
-                HStack { Text("Make playlist").bold(); if creating { Spacer(); ProgressView() } }
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("AI CURATOR", systemImage: "sparkles")
+                    .font(Theme.caps).tracking(0.8).foregroundStyle(Theme.amber)
+                Text("What do you want to hear?").font(Theme.display(30)).tracking(-0.6)
+                Text("Describe a mood, a place, an activity or a few artists. Crate matches it to the sound of your library.")
+                    .font(.subheadline).foregroundStyle(Theme.textMedium)
             }
-            .disabled(draft.prompt.trimmingCharacters(in: .whitespaces).count < 3 || creating)
-        } header: {
-            Text("New prompt playlist")
-        } footer: {
-            Text("Crate matches the sound of your library to your words, and can fetch a few new songs too.")
+
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("Warm, slow songs for a rainy Sunday", text: $draft.prompt, axis: .vertical)
+                    .font(.title3)
+                    .lineLimit(3...6)
+                    .focused($typingPrompt)
+                    .submitLabel(.done)
+                    .onChange(of: draft.prompt) { _, text in
+                        // A multi-line field types a newline on Return: treat it as Done instead
+                        guard text.contains("\n") else { return }
+                        draft.prompt = text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
+                        typingPrompt = false
+                    }
+                HStack {
+                    Text(draft.newTracks == 0 ? "\(draft.size) SONGS · FROM YOUR LIBRARY" : "\(draft.size) SONGS · UP TO \(draft.newTracks) NEW")
+                        .font(Theme.caps).tracking(0.6).foregroundStyle(Theme.textLow)
+                    Spacer()
+                    Button { create() } label: {
+                        Group {
+                            if creating { ProgressView().tint(Theme.canvas) }
+                            else { Image(systemName: "arrow.up").font(.system(size: 17, weight: .bold)) }
+                        }
+                        .foregroundStyle(Theme.canvas)
+                        .frame(width: 42, height: 42)
+                        .background(canCreate || creating ? Theme.amber : Theme.surface3, in: Circle())
+                    }
+                    .buttonStyle(PressScale())
+                    .disabled(!canCreate)
+                    .accessibilityLabel("Make playlist")
+                }
+            }
+            .padding(16)
+            .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Theme.amber.opacity(typingPrompt ? 0.6 : 0), lineWidth: 1)
+            }
+            .animation(.easeOut(duration: 0.2), value: typingPrompt)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Label("QUICK PROMPTS", systemImage: "bolt.fill")
+                    .font(Theme.caps).tracking(0.8).foregroundStyle(Theme.textMedium)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(quickPrompts, id: \.self) { q in
+                            Chip(title: q, selected: draft.prompt == q) { draft.prompt = q }
+                        }
+                    }
+                }
+                .scrollClipDisabled()
+            }
+
+            VStack(spacing: 0) {
+                Stepper("\(draft.size) songs", value: $draft.size, in: 5...150, step: 5)
+                    .padding(.vertical, 10)
+                Divider().overlay(Theme.surface3)
+                Stepper(draft.newTracks == 0 ? "Only songs I have" : "Up to \(draft.newTracks) new songs",
+                        value: $draft.newTracks, in: 0...min(30, draft.size - 1))
+                    .padding(.vertical, 10)
+                Divider().overlay(Theme.surface3)
+                Toggle("Refresh weekly", isOn: $draft.autoRefresh)
+                    .tint(Theme.amber)
+                    .padding(.vertical, 10)
+            }
+            .padding(.horizontal, 16)
+            .background(Theme.surface1, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Text("New songs also fill in whatever your library can't. Ones you don't keep leave again at the next rebuild.")
+                .font(.caption).foregroundStyle(Theme.textLow)
         }
     }
 
     private var promptList: some View {
-        Section("Prompt playlists") {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle(title: "Your prompt playlists")
             ForEach(prompts) { p in
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 12) {
                     NavigationLink(value: PlaylistRef(key: p.playlistKey, name: p.name ?? p.prompt, comment: p.prompt)) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(p.name ?? p.prompt).lineLimit(1)
-                            Text("“\(p.prompt)” · \(p.size) songs" + (p.lastRun.map { " · made \(Optional($0).ago)" } ?? ""))
-                                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                        HStack(spacing: 12) {
+                            Image(systemName: PlaylistKind.prompt.symbol)
+                                .font(.headline).foregroundStyle(PlaylistKind.prompt.color)
+                                .frame(width: 44, height: 44)
+                                .background(Theme.surface3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(p.name ?? p.prompt).font(.body.weight(.semibold)).lineLimit(1)
+                                Text("“\(p.prompt)” · \(p.size) songs" + (p.lastRun.map { " · made \(Optional($0).ago)" } ?? ""))
+                                    .font(.caption).foregroundStyle(Theme.textMedium).lineLimit(2)
+                                    .multilineTextAlignment(.leading)
+                            }
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(Theme.textLow)
                         }
+                        .contentShape(Rectangle())
                     }
-                    HStack {
+                    .buttonStyle(.plain)
+                    HStack(spacing: 10) {
                         Toggle("Weekly", isOn: Binding(get: { p.autoRefresh }, set: { on in setRefresh(p, on) }))
-                            .font(.caption).fixedSize()
+                            .font(.caption.weight(.semibold)).tint(Theme.amber).fixedSize()
                         Spacer()
-                        Button("Rebuild") {
+                        PillButton(title: "Rebuild", systemImage: "arrow.triangle.2.circlepath", prominent: true) {
                             Task { model.track(await model.attempt { try await $0.rerunPrompt(p.id) }, p.name ?? "Prompt playlist") }
                         }
-                        .buttonStyle(.bordered).font(.caption)
-                        Button(role: .destructive) { forgetting = p } label: { Image(systemName: "trash") }
-                            .buttonStyle(.bordered).font(.caption)
+                        CircleIconButton(systemImage: "trash", tint: Color(hex: 0xFFB4AB), label: "Forget") { forgetting = p }
                     }
                 }
+                .padding(14)
+                .background(Theme.surface1, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+    }
+
+    private var jobs: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            SectionTitle(title: "Automated playlists", subtitle: "Crate runs these on a schedule. Run any of them now.")
+            ForEach(order.filter { model.status?.jobs[$0.job] != nil }, id: \.job) { entry in
+                JobRow(job: entry.job, about: entry.about, symbol: entry.symbol)
             }
         }
     }
@@ -157,33 +233,40 @@ struct JobRow: View {
     @Environment(AppModel.self) private var model
     let job: String
     let about: String
+    var symbol = "gearshape"
 
     private var last: Run? { model.status?.jobs[job]?.last }
     private var running: Bool { model.status?.busy.contains { $0.kind == job } ?? false }
 
     var body: some View {
-        HStack(alignment: .top) {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.headline).foregroundStyle(Theme.amber)
+                .frame(width: 40, height: 40)
+                .background(Theme.surface3, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             VStack(alignment: .leading, spacing: 3) {
-                Text(model.jobLabel(job)).font(.body.weight(.medium))
-                Text(about).font(.caption).foregroundStyle(.secondary)
+                Text(model.jobLabel(job)).font(.body.weight(.semibold))
+                Text(about).font(.caption).foregroundStyle(Theme.textMedium)
                 if let last {
                     Text("Last: \(last.summary ?? last.status) · \(last.finished.ago)")
-                        .font(.caption2).foregroundStyle(last.status == "failed" ? .red : .secondary)
+                        .font(.caption2).foregroundStyle(last.status == "failed" ? Color(hex: 0xFFB4AB) : Theme.textLow)
                         .lineLimit(2)
                 }
                 if let next = model.status?.nextRun(job) {
                     Text("Next: \(next.formatted(.dateTime.weekday(.abbreviated).hour().minute()))")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .font(.caption2).foregroundStyle(Theme.textLow)
                 }
             }
-            Spacer()
+            Spacer(minLength: 0)
             if running {
-                ProgressView()
+                ProgressView().tint(Theme.amber).padding(.top, 8)
             } else {
-                Button("Run now") { model.runNow(job, label: model.jobLabel(job)) }
-                    .buttonStyle(.bordered).font(.caption)
+                PillButton(title: "Run", systemImage: "play.fill", prominent: true) {
+                    model.runNow(job, label: model.jobLabel(job))
+                }
             }
         }
-        .padding(.vertical, 2)
+        .padding(14)
+        .background(Theme.surface1, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }

@@ -34,6 +34,10 @@ struct SuggestionsSection: View {
             }
             ForEach(items) { s in
                 row(s)
+                    .listRowInsets(EdgeInsets(top: 9, leading: 22, bottom: 9, trailing: 22))
+                    .listRowBackground(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.surface1)
+                        .padding(.horizontal, 12).padding(.vertical, 3))
+                    .listRowSeparator(.hidden)
             }
         } header: {
             HStack {
@@ -41,7 +45,7 @@ struct SuggestionsSection: View {
                 Spacer()
                 if working && !items.isEmpty { ProgressView().controlSize(.small) }
                 Button { Task { await refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .font(.caption.bold()).disabled(working)
+                    .font(.caption.bold()).foregroundStyle(Theme.amber).disabled(working)
             }
         } footer: {
             Text(ref.readonly
@@ -67,21 +71,18 @@ struct SuggestionsSection: View {
             }
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(s.title).lineLimit(1)
-                Text(s.artist).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(s.title).font(.body.weight(.semibold)).lineLimit(1)
+                    .foregroundStyle(isCurrent ? Theme.amber : Color.white)
+                Text(s.artist).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
                 HStack(spacing: 6) {
                     if s.kind == .new { Badge(text: "New") }
                     Text(s.reason).lineLimit(1)
                 }
-                .font(.caption2).foregroundStyle(.secondary)
+                .font(.caption2).foregroundStyle(Theme.textLow)
             }
             Spacer(minLength: 0)
 
-            Button { dislike(s) } label: {
-                Image(systemName: "hand.thumbsdown").foregroundStyle(.secondary)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel("Not for me")
+            CircleIconButton(systemImage: "hand.thumbsdown", tint: Theme.textMedium, size: 32, label: "Not for me") { dislike(s) }
 
             if !ref.readonly { addButton(s) }
         }

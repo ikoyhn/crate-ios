@@ -39,10 +39,10 @@ struct PlaylistsView: View {
                             Image(systemName: "arrow.down.circle.fill")
                                 .font(.title2).foregroundStyle(.white)
                                 .frame(width: 52, height: 52)
-                                .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                                .background(Theme.amber.gradient, in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("Downloads")
-                                Text(downloadsSubtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                Text("Downloads").font(.body.weight(.semibold))
+                                Text(downloadsSubtitle).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
                             }
                         }
                         .padding(.vertical, 2)
@@ -78,6 +78,7 @@ struct PlaylistsView: View {
                     }
                 }
             }
+            .crateScreen()
             .navigationTitle("Playlists")
             .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
             .refreshable { await load() }
@@ -150,8 +151,8 @@ struct PlaylistRow: View {
                     .offset(x: 4, y: 4)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(name).font(.body).lineLimit(1)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Text(name).font(.body.weight(.semibold)).lineLimit(1)
+                Text(subtitle).font(.caption).foregroundStyle(Theme.textMedium).lineLimit(1)
             }
         }
         .padding(.vertical, 2)

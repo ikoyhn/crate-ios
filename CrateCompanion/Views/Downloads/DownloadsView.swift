@@ -79,6 +79,7 @@ struct DownloadsView: View {
                 }
             }
         }
+        .crateScreen()
         .navigationTitle("Downloads")
         .confirmationDialog("Remove all downloads?", isPresented: $confirmRemoveAll, titleVisibility: .visible) {
             Button("Remove all", role: .destructive) { downloads.removeAll() }

@@ -77,6 +77,7 @@ struct ConnectView: View {
                     .disabled(busy || c.crateURL.isEmpty)
                 }
             }
+            .crateScreen()
             .navigationTitle(editing ? "Server" : "Welcome to Crate")
             .toolbar {
                 if editing { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }

@@ -24,23 +24,23 @@ struct Artwork: View {
                 image.resizable().aspectRatio(contentMode: .fill)
             } else {
                 ZStack {
-                    Rectangle().fill(.quaternary)
-                    Image(systemName: "music.note").foregroundStyle(.secondary).font(.system(size: (size ?? 120) * 0.35))
+                    Rectangle().fill(Theme.surface2)
+                    Image(systemName: "music.note").foregroundStyle(Theme.textLow).font(.system(size: (size ?? 120) * 0.35))
                 }
             }
         }
     }
 }
 
-/// New (waiting in the inbox), Kept, Added by you.
+/// New (waiting in the inbox), Kept, Added by you: small uppercase pills.
 struct Badge: View {
     let text: String
-    var color: Color = .accentColor
+    var color: Color = Theme.amber
     var body: some View {
-        Text(text)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(color.opacity(0.15), in: Capsule())
+        Text(text.uppercased())
+            .font(Theme.caps).tracking(0.6)
+            .padding(.horizontal, 7).padding(.vertical, 3)
+            .background(color.opacity(0.16), in: Capsule())
             .foregroundStyle(color)
     }
 }
@@ -58,7 +58,7 @@ struct StarRating: View {
                 } label: {
                     Image(systemName: n <= rating ? "star.fill" : "star")
                         .font(size)
-                        .foregroundStyle(n <= rating ? Color.yellow : Color.secondary)
+                        .foregroundStyle(n <= rating ? Theme.honey : Theme.textLow)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("\(n) star\(n == 1 ? "" : "s")")
@@ -73,7 +73,7 @@ struct HeartButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: starred ? "heart.fill" : "heart")
-                .foregroundStyle(starred ? Color.pink : Color.secondary)
+                .foregroundStyle(starred ? Theme.amber : Theme.textMedium)
                 .contentTransition(.symbolEffect(.replace))
         }
         .buttonStyle(.plain)
@@ -94,8 +94,8 @@ struct ToastView: View {
                 }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
-            .shadow(radius: 8, y: 2)
+            .background(Theme.surface2, in: Capsule())
+            .shadow(color: .black.opacity(0.5), radius: 12, y: 4)
             .padding(.top, 8).padding(.horizontal)
             .transition(.move(edge: .top).combined(with: .opacity))
             .onTapGesture { model.toast = nil }
@@ -115,7 +115,7 @@ struct BusyBanner: View {
     var body: some View {
         if let busy = model.status?.busy, !busy.isEmpty {
             HStack(alignment: .top) {
-                ProgressView().padding(.trailing, 4)
+                ProgressView().tint(Theme.amber).padding(.trailing, 4)
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(busy, id: \.self) { b in
                         Text(line(b)).font(.subheadline)
@@ -123,15 +123,15 @@ struct BusyBanner: View {
                 }
                 Spacer()
                 Button("Stop all", role: .destructive) { confirmStop = true }
-                    .font(.subheadline)
+                    .font(.subheadline.weight(.semibold))
                     .confirmationDialog("Stop everything Crate is doing?", isPresented: $confirmStop, titleVisibility: .visible) {
                         Button("Stop all tasks", role: .destructive) { model.stopAll() }
                     } message: {
                         Text("Waiting tasks are cancelled; running ones stop at their next safe point. Scheduled runs still happen at their usual time.")
                     }
             }
-            .padding(12)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .padding(14)
+            .background(Theme.surface2, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 
@@ -182,12 +182,12 @@ extension PlaylistKind {
 
     var color: Color {
         switch self {
-        case .discover: .purple
-        case .releaseRadar: .orange
-        case .dailyMix: .teal
-        case .prompt: .indigo
-        case .liked: .pink
-        case .own, .other: .gray
+        case .discover: Theme.amber
+        case .releaseRadar: Theme.honey
+        case .dailyMix: Color(hex: 0x38BDF8)
+        case .prompt: Color(hex: 0xC084FC)
+        case .liked: Color(hex: 0xF472B6)
+        case .own, .other: Theme.surface3
         }
     }
 }
