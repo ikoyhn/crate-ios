@@ -138,6 +138,49 @@ final class AppModel {
         return resolver?.item(track, playlistKey: nil)
     }
 
+    /// Play next (or add to the end of the queue) a song from Deezer: straight away if it's in your
+    /// library, else downloaded into your library first and queued once Navidrome has it.
+    func queueCatalogSong(deezerId: Int, artist: String, title: String, next: Bool = true) {
+        let spot = next ? "next" : "at the end of the queue"
+        func enqueue(_ item: PlayableItem) {
+            if next { player.playNext(item) } else { player.addToQueue(item) }
+        }
+        Task {
+            if let item = await libraryItem(artist: artist, title: title) {
+                enqueue(item)
+                say("\(title) plays \(spot)")
+                return
+            }
+            guard navidrome != nil else {
+                say("Add your Navidrome password (Activity › Change server…) to queue songs from your library")
+                return
+            }
+            guard let started = await attempt("Couldn't get \(title)", { try await $0.want(track: deezerId) }) else { return }
+            say("Downloading \(title); it'll play \(spot)")
+            dataVersion += 1  // shows it downloading
+            if let id = started.runId, let api = crate {
+                tracked.append(TrackedRun(id: id, label: "Downloading \(title)"))
+                let run = try? await api.waitFor(run: id, every: 2.5)
+                tracked.removeAll { $0.id == id }
+                dataVersion += 1
+                if run?.status == "failed" || run?.status == "cancelled" {
+                    say("Couldn't download \(title)\(run?.summary.map { ": \($0)" } ?? "")")
+                    return
+                }
+            }
+            // Navidrome can take a moment to list a file it has just scanned
+            for _ in 0..<5 {
+                if let item = await libraryItem(artist: artist, title: title) {
+                    enqueue(item)
+                    say("\(title) is downloaded and plays \(spot)")
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+            }
+            say("\(title) is downloaded, but Navidrome hasn't listed it yet. Try again in a minute.")
+        }
+    }
+
     // MARK: - feedback
 
     func say(_ text: String, undo: (@MainActor () -> Void)? = nil) {

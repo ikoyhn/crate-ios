@@ -110,8 +110,11 @@ struct SuggestionsSection: View {
             }
         }
         .contextMenu {
-            if let item {
-                Button { player.playNext(item) } label: { Label("Play next", systemImage: "text.insert") }
+            Button { queue(s, item, next: true) } label: {
+                Label(s.kind == .new ? "Download and play next" : "Play next", systemImage: "text.insert")
+            }
+            Button { queue(s, item, next: false) } label: {
+                Label(s.kind == .new ? "Download and add to queue" : "Add to queue", systemImage: "text.append")
             }
             if adding[s.id] == nil {
                 Button { send(s) } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
@@ -175,6 +178,17 @@ struct SuggestionsSection: View {
                 adding[s.id] = .downloading
                 model.track(started, "Adding \(s.title)")
             }
+        }
+    }
+
+    /// A library song is queued now; a new one is downloaded into your library, then queued
+    /// (rather than queueing its 30-second preview).
+    private func queue(_ s: Suggestion, _ item: PlayableItem?, next: Bool) {
+        if s.kind == .new, let deezerId = s.deezerId {
+            adding[s.id] = .downloading
+            model.queueCatalogSong(deezerId: deezerId, artist: s.artist, title: s.title, next: next)
+        } else if let item {
+            if next { player.playNext(item) } else { player.addToQueue(item) }
         }
     }
 
