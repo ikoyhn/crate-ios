@@ -345,12 +345,20 @@ struct SongListRow: View {
 struct SongMenu: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
+    @Environment(DownloadStore.self) private var downloads
+    @Environment(\.pickPlaylist) private var pickPlaylist
     let track: Track
 
     var body: some View {
         if let item = model.resolver?.item(track, playlistKey: nil) {
             Button { player.playNext(item) } label: { Label("Play next", systemImage: "text.insert") }
             Button { player.addToQueue(item) } label: { Label("Add to queue", systemImage: "text.append") }
+        }
+        Button { pickPlaylist(PlaylistPick(song: .library(track.songId), title: track.title)) } label: {
+            Label("Add to playlist…", systemImage: "text.badge.plus")
+        }
+        if !downloads.isDownloaded(track.songId) && !downloads.isDownloading(track.songId) {
+            Button { downloads.download([track]) } label: { Label("Download", systemImage: "arrow.down.circle") }
         }
         Button { model.setStar(track.songId, !track.starred) } label: {
             Label(track.starred ? "Unlove" : "Love", systemImage: track.starred ? "heart.slash" : "heart")

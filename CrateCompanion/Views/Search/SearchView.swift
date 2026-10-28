@@ -167,12 +167,37 @@ struct CatalogTrackRow: View {
         .onTapGesture(perform: playOrPause)
         .accessibilityAction(named: isCurrent && player.isPlaying ? "Pause" : "Play", playOrPause)
         .swipeActions(edge: .leading) {
+            Button { playNext() } label: { Label("Play next", systemImage: "text.insert") }
+                .tint(Theme.amber)
             // a song you have is found in your library; a new one is downloaded first
-            Button { pickPlaylist(PlaylistPick(song: .new(deezerId: track.deezerId), title: track.title)) } label: {
-                Label("Playlist", systemImage: "text.badge.plus")
-            }
-            .tint(.blue)
+            Button { addToPlaylist() } label: { Label("Playlist", systemImage: "text.badge.plus") }
+                .tint(.blue)
         }
+        .contextMenu {
+            Button { playNext() } label: {
+                Label(have ? "Play next" : "Download and play next", systemImage: "text.insert")
+            }
+            Button { model.queueCatalogSong(deezerId: track.deezerId, artist: track.artist, title: track.title, next: false) } label: {
+                Label(have ? "Add to queue" : "Download and add to queue", systemImage: "text.append")
+            }
+            Button(action: addToPlaylist) { Label("Add to playlist…", systemImage: "text.badge.plus") }
+            if !have && want?.isBusy != true {
+                Button { onAdd(track) } label: { Label("Save to my library", systemImage: "plus.circle") }
+            }
+            if !track.preview.isEmpty, let item = model.resolver?.item(track) {
+                Divider()
+                Button { player.play(item) } label: { Label("Play preview", systemImage: "play.circle") }
+            }
+        }
+    }
+
+    /// Queued straight away if you have it; otherwise downloaded into your library, then queued.
+    private func playNext() {
+        model.queueCatalogSong(deezerId: track.deezerId, artist: track.artist, title: track.title)
+    }
+
+    private func addToPlaylist() {
+        pickPlaylist(PlaylistPick(song: .new(deezerId: track.deezerId), title: track.title))
     }
 
     private var have: Bool { track.owned || want?.succeeded == true }
@@ -307,10 +332,29 @@ struct WantRow: View {
         player.current?.songId != nil && player.current?.title == want.title && player.current?.artist == want.artist
     }
 
+    @Environment(\.pickPlaylist) private var pickPlaylist
+
     var body: some View {
         row
             .contentShape(Rectangle())
             .onTapGesture { play() }
+            .contextMenu {
+                if want.succeeded {
+                    Button { queue(next: true) } label: { Label("Play next", systemImage: "text.insert") }
+                    Button { queue(next: false) } label: { Label("Add to queue", systemImage: "text.append") }
+                }
+                if let id = want.deezerId {
+                    Button { pickPlaylist(PlaylistPick(song: .new(deezerId: id), title: want.title)) } label: {
+                        Label("Add to playlist…", systemImage: "text.badge.plus")
+                    }
+                }
+            }
+    }
+
+    private func queue(next: Bool) {
+        if let id = want.deezerId {
+            model.queueCatalogSong(deezerId: id, artist: want.artist, title: want.title, next: next)
+        }
     }
 
     private func play() {
