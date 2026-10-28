@@ -48,12 +48,13 @@ struct SuggestionsSection: View {
                     .font(.caption.bold()).foregroundStyle(Theme.amber).disabled(working)
             }
         } footer: {
-            Text(ref.readonly
-                 ? "Navidrome won't let Crate change this playlist, so you can listen to suggestions but not add them."
+            Text((ref.readonly
+                 ? "Navidrome won't let Crate change this playlist, but you can add suggestions to your other playlists. "
                  : ref.kind == .own
-                 ? "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist."
+                 ? "👎 on a new song: never suggested again, and similar songs rank lower. On a library song: just not for this playlist. "
                  : "New songs only: songs you already have are suggested for your own playlists. + saves a song to your library. "
-                   + "Swipe right to save it into one of your playlists. 👎: never suggested again, and similar songs rank lower.")
+                   + "👎: never suggested again, and similar songs rank lower. ")
+                 + "Add to playlist puts a song into any of your playlists; a new song is downloaded into your library first.")
         }
         .task(id: ref.key) { await poll() }
     }
@@ -84,6 +85,11 @@ struct SuggestionsSection: View {
 
             CircleIconButton(systemImage: "hand.thumbsdown", tint: Theme.textMedium, size: 32, label: "Not for me") { dislike(s) }
 
+            if adding[s.id] == nil {
+                // Into any of your playlists; a new song is downloaded into your library first
+                CircleIconButton(systemImage: "text.badge.plus", tint: Theme.textMedium, size: 32,
+                                 label: "Add to playlist…") { send(s) }
+            }
             if !ref.readonly { addButton(s) }
         }
         // Tap anywhere on the row to play (or pause) it; the 👎 and + buttons keep their own taps
@@ -94,19 +100,25 @@ struct SuggestionsSection: View {
             Button(role: .destructive) { dislike(s) } label: { Label("Not for me", systemImage: "hand.thumbsdown") }
         }
         .swipeActions(edge: .leading) {
-            if !ref.readonly && adding[s.id] == nil {
-                if ref.kind == .own {
-                    Button { add(s) } label: { Label("Add", systemImage: "plus") }.tint(.accentColor)
-                } else {
-                    // Crate rebuilds its playlists: send it to one of yours, or pin it here
-                    Button { send(s) } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
-                    Button { add(s) } label: { Label("Add here", systemImage: "pin") }.tint(.accentColor)
+            if adding[s.id] == nil {
+                Button { send(s) } label: { Label("Playlist", systemImage: "text.badge.plus") }.tint(.blue)
+                if !ref.readonly {
+                    // your own playlist: straight in; one of Crate's: pinned so it stays across rebuilds
+                    Button { add(s) } label: { Label(ref.kind == .own ? "Add" : "Add here", systemImage: ref.kind == .own ? "plus" : "pin") }
+                        .tint(.accentColor)
                 }
             }
         }
         .contextMenu {
             if let item {
                 Button { player.playNext(item) } label: { Label("Play next", systemImage: "text.insert") }
+            }
+            if adding[s.id] == nil {
+                Button { send(s) } label: { Label("Add to playlist…", systemImage: "text.badge.plus") }
+                if !ref.readonly {
+                    Button { add(s) } label: { Label(ref.kind == .own ? "Add to this playlist" : "Keep in this playlist",
+                                                     systemImage: ref.kind == .own ? "plus" : "pin") }
+                }
             }
         }
     }
