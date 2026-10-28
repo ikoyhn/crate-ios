@@ -181,6 +181,32 @@ final class AppModel {
         }
     }
 
+    /// Playlists you can delete: your own Navidrome ones, and prompt playlists. Discover Weekly
+    /// and the rest are made again on their schedule.
+    func canDelete(playlistKey key: String, readonly: Bool = false) -> Bool {
+        (key.hasPrefix("nd:") && !readonly) || PlaylistKind.promptId(key: key) != nil
+    }
+
+    /// Delete a playlist (from Navidrome too). The songs stay in your library. True when it's gone.
+    @discardableResult
+    func deletePlaylist(key: String, name: String) async -> Bool {
+        let done: Void?
+        if key.hasPrefix("nd:") {
+            done = await attempt("Couldn't delete \(name)") { try await $0.deleteOwnPlaylist(String(key.dropFirst(3))) }
+        } else if let id = PlaylistKind.promptId(key: key) {
+            done = await attempt("Couldn't delete \(name)") { try await $0.forgetPrompt(id, deletePlaylist: true) }
+        } else {
+            say("\(name) is made by Crate on a schedule, so it can't be deleted")
+            return false
+        }
+        guard done != nil else { return false }
+        downloads.removePlaylist(key)
+        forgetPlaylistCovers()
+        say("Deleted \(name)")
+        dataVersion += 1
+        return true
+    }
+
     // MARK: - feedback
 
     func say(_ text: String, undo: (@MainActor () -> Void)? = nil) {

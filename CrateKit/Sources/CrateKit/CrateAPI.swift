@@ -297,7 +297,15 @@ public struct CrateAPI: Sendable {
     }
 
     /// Stop managing it. The playlist stays in Navidrome; unliked new tracks are deleted.
-    public func forgetPrompt(_ id: Int) async throws { _ = try await request("DELETE", "/api/prompts/\(id)") }
+    /// Stop managing it. The Navidrome playlist stays unless deletePlaylist is set.
+    public func forgetPrompt(_ id: Int, deletePlaylist: Bool = false) async throws {
+        _ = try await request("DELETE", "/api/prompts/\(id)" + (deletePlaylist ? "?delete_playlist=true" : ""))
+    }
+
+    /// Delete one of your own Navidrome playlists. The songs stay in your library.
+    public func deleteOwnPlaylist(_ navidromeId: String) async throws {
+        _ = try await request("DELETE", "/api/own-playlists/\(navidromeId.addingPathEscapes)")
+    }
 
     // MARK: - activity
 

@@ -5,6 +5,7 @@ struct PlaylistDetailView: View {
     @Environment(AppModel.self) private var model
     @Environment(AudioPlayer.self) private var player
     @Environment(DownloadStore.self) private var downloads
+    @Environment(\.dismiss) private var dismiss
     let ref: PlaylistRef
 
     enum Tab: String, CaseIterable { case tracks = "Songs", suggested = "Suggested" }
@@ -26,6 +27,7 @@ struct PlaylistDetailView: View {
     @State private var removed: Set<String> = []
     /// Couldn't reach the server: showing the copy saved on the phone.
     @State private var offline = false
+    @State private var confirmDeletePlaylist = false
 
     private var regenerateJob: String? { ref.kind.job(key: ref.key) }
     private var promptId: Int? { PlaylistKind.promptId(key: ref.key) }
@@ -68,6 +70,15 @@ struct PlaylistDetailView: View {
         .toolbar { toolbar }
         .refreshable { await load() }
         .task(id: model.dataVersion) { await load() }
+        .confirmationDialog("Delete “\(ref.name)”?", isPresented: $confirmDeletePlaylist, titleVisibility: .visible) {
+            Button("Delete playlist", role: .destructive) {
+                Task { if await model.deletePlaylist(key: ref.key, name: ref.name) { dismiss() } }
+            }
+        } message: {
+            Text(promptId != nil
+                 ? "Deletes the playlist from Navidrome and Crate stops making it. Songs you kept stay in your library."
+                 : "Deletes the playlist from Navidrome. Its songs stay in your library.")
+        }
         .confirmationDialog("Rebuild \(ref.name)?", isPresented: $confirmRegenerate, titleVisibility: .visible) {
             Button("Rebuild now") { regenerate() }
         } message: {
@@ -279,6 +290,12 @@ struct PlaylistDetailView: View {
                 Button { confirmRegenerate = true } label: { Label("Rebuild now", systemImage: "arrow.triangle.2.circlepath") }
             }
             Button { show(.suggested, .all) } label: { Label("Suggested songs", systemImage: "sparkles") }
+        }
+        if model.canDelete(playlistKey: ref.key, readonly: ref.readonly) {
+            Divider()
+            Button(role: .destructive) { confirmDeletePlaylist = true } label: {
+                Label("Delete playlist…", systemImage: "trash")
+            }
         }
     }
 
